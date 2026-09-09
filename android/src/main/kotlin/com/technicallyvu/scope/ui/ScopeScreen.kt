@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.ui
 
 import android.hardware.usb.UsbDevice
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -31,7 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.core.driver.StreamStats
@@ -42,8 +42,10 @@ import java.util.Locale
 @Composable
 fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     val ui by vm.ui.collectAsState()
-    val activity = LocalContext.current as android.app.Activity
-    val wide = calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
+    // No activity (a preview, or a non-activity context): fall back to the compact layout rather
+    // than crashing on a cast.
+    val activity = LocalActivity.current
+    val wide = if (activity == null) false else calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StatusBar(ui)
@@ -104,7 +106,9 @@ private fun StatsOverlay(st: StreamStats, modifier: Modifier) {
 
 @Composable
 private fun Controls(ui: UiState, vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
-    val streaming = ui.image != null
+    // A live frame AND a live stream: after an unplug the last bitmap is dropped, and a stale one
+    // must never leave Snapshot/Record enabled.
+    val streaming = ui.session.connection is ConnectionState.Streaming && ui.image != null
     val s = ui.session
     ui.permissionDevice?.let { dev -> Button(onClick = { onRequestPermission(dev) }) { Text("Allow USB access") } }
     Button(onClick = vm::snapshot, enabled = streaming) { Text("Snapshot") }

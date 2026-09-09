@@ -23,11 +23,15 @@ class MediaStoreSaver(private val resolver: ContentResolver, private val folder:
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: throw IOException("MediaStore insert failed")
         try {
             resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw IOException("cannot open $uri")
+            // Best effort: the pixels are already written, so a failed EXIF tag must not lose the
+            // photo. The file stays a valid JPEG, just with the default orientation.
             if (exifOrientation != null) {
-                resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
-                    ExifInterface(pfd.fileDescriptor).apply {
-                        setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                        saveAttributes()
+                runCatching {
+                    resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                        ExifInterface(pfd.fileDescriptor).apply {
+                            setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                            saveAttributes()
+                        }
                     }
                 }
             }
@@ -45,7 +49,7 @@ class MediaStoreSaver(private val resolver: ContentResolver, private val folder:
         return saveJpeg(out.toByteArray(), null, displayName)
     }
 
-    class PendingVideo(val uri: Uri, val fd: ParcelFileDescriptor)
+    class PendingVideo(val uri: Uri, val fd: ParcelFileDescriptor, val displayName: String)
 
     fun createVideo(displayName: String): PendingVideo {
         val values = ContentValues().apply {
@@ -56,7 +60,7 @@ class MediaStoreSaver(private val resolver: ContentResolver, private val folder:
         }
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: throw IOException("MediaStore insert failed")
         val fd = resolver.openFileDescriptor(uri, "rw") ?: run { resolver.delete(uri, null, null); throw IOException("cannot open $uri") }
-        return PendingVideo(uri, fd)
+        return PendingVideo(uri, fd, displayName)
     }
 
     fun finishVideo(video: PendingVideo, keep: Boolean) {

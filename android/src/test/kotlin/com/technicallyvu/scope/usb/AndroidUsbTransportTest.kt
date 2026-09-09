@@ -76,6 +76,17 @@ class AndroidUsbTransportTest {
     }
 
     @Test
+    fun `an unknown endpoint is a UsbException, not a timeout`() {
+        val c = object : UsbConnection by FakeConnection() {
+            override fun bulkTransfer(endpoint: Int, buffer: ByteArray, length: Int, timeoutMs: Int): Int =
+                throw IllegalArgumentException("no endpoint 83")
+        }
+        val t = AndroidUsbTransport(c)
+        assertThrows(UsbException::class.java) { t.bulkRead(0x83, ByteArray(16), 500) }
+        assertThrows(UsbException::class.java) { t.bulkWrite(0x03, ByteArray(4), 500) }
+    }
+
+    @Test
     fun `claim failure and reset are UsbExceptions`() {
         val c = object : UsbConnection by FakeConnection() { override fun claimInterface(number: Int) = false }
         val t = AndroidUsbTransport(c)

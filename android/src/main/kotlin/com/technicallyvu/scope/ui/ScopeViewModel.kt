@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.technicallyvu.scope.BuildConfig
@@ -30,9 +31,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.concurrent.thread
 
 data class UiState(
     val session: SessionState = SessionState(),
@@ -57,9 +60,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: Bitmap? = null
     private val recorderLock = Any()
-    private var recorder: SurfaceRecorder? = null
-    private var pendingVideo: MediaStoreSaver.PendingVideo? = null
+    // Mutated only under recorderLock; @Volatile so the state collector can read "is anything
+    // recording?" from the main thread without taking the lock.
+    @Volatile private var recorder: SurfaceRecorder? = null
+    @Volatile private var pendingVideo: MediaStoreSaver.PendingVideo? = null
     private var recorderGeneration = 0L
+    /** Guards against a second replay start/stop while the previous session is still winding down. */
+    private var switchingSession = false
 
     init {
         attach(newSession(usbDevices), replaying = false)
@@ -79,13 +86,20 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
         session.start()
         stateJob = viewModelScope.launch {
             session.state.collect { s ->
+                val streaming = s.connection is ConnectionState.Streaming
+                // Anything but Streaming means the last frame is stale (unplug, error, reconnect):
+                // drop it so the view falls back to its status text instead of a frozen picture.
+                if (!streaming) { lastImage = null; lastFrame = null }
                 _ui.update {
                     it.copy(
                         session = s,
+                        image = if (streaming) it.image else null,
                         permissionDevice = if (!replaying && s.connection is ConnectionState.Failed) usbDevices.pendingPermission else null,
                     )
                 }
-                if (!s.recording) stopRecordingIfActive()
+                // Off the main thread: stopping the recorder takes recorderLock and calls into
+                // MediaRecorder/MediaStore, neither of which is quick.
+                if (!s.recording && recorder != null) viewModelScope.launch(Dispatchers.IO) { stopRecordingIfActive() }
             }
         }
     }
@@ -110,14 +124,21 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
 
     fun snapshot() {
+        // Both are published together in onFrame, so they describe the same frame.
         val data = lastFrame ?: return
+        val shown = lastImage ?: return
         val s = session.state.value
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".jpg"
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 when (data) {
+                    // Original bytes plus an EXIF orientation tag: no re-encode, no quality loss.
                     is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
-                    is FrameData.Yuyv422 -> saver.saveBitmapJpeg(bitmaps.transform(bitmaps.toBitmap(data)!!, s.rotation, s.mirror), name)
+                    // Compress the bitmap the user is looking at. Never re-convert: FrameBitmaps
+                    // reuses its pixel buffer for the worker's next frame. Bitmaps out of
+                    // Bitmap.createBitmap are immutable, so compressing here while the worker
+                    // moves on is safe.
+                    is FrameData.Yuyv422 -> saver.saveBitmapJpeg(shown, name)
                 }
             }.onSuccess { session.markSaved(name) }
              .onFailure { e -> _ui.update { it.copy(message = "Snapshot failed: ${e.message}") } }
@@ -126,7 +147,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
 
     fun toggleRecording() {
         val active = synchronized(recorderLock) { recorder != null }
-        if (active) { stopRecordingIfActive(); return }
+        // Stopping touches MediaRecorder and MediaStore; keep it off the main thread.
+        if (active) { viewModelScope.launch(Dispatchers.IO) { stopRecordingIfActive() }; return }
         val img = lastImage ?: return
         val generation = synchronized(recorderLock) { recorderGeneration }
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
@@ -139,7 +161,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
             pendingVideo = video
         }
         session.setRecording(true)
-        session.markSaved(name)
+        // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
     }
 
     private fun stopRecordingIfActive() = synchronized(recorderLock) { stopRecordingLocked(keep = true) }
@@ -151,7 +173,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
         pendingVideo = null
         recorderGeneration++
         runCatching { rec.close() }
-        if (video != null) saver.finishVideo(video, keep = keep && rec.framesWritten > 0)
+        if (video != null) {
+            // A clip is only playable when frames were written AND the encoder stopped cleanly
+            // (a failed stop means the MP4 was never finalised).
+            val kept = keep && rec.framesWritten > 0 && !rec.stopFailed
+            saver.finishVideo(video, keep = kept)
+            if (kept) session.markSaved(video.displayName)
+        }
         session.setRecording(false)
     }
 
@@ -167,29 +195,52 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
 
     // ---- debug replay ----
     fun startReplay() {
-        if (!BuildConfig.DEBUG || _ui.value.replaying) return
-        session.stop()
+        if (!BuildConfig.DEBUG || _ui.value.replaying || switchingSession) return
         val app = getApplication<Application>()
-        val info = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
-        val replay = ReplayDeviceSource({ app.assets.open("fixtures/i4season-yuv-320x240.upkt") }, info, videoEndpoint = I4seasonYuvDriver.EP_IN)
-        attach(newSession(replay), replaying = true)
-        _ui.update { it.copy(image = null) }
+        switchSession {
+            val info = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
+            val replay = ReplayDeviceSource({ app.assets.open("fixtures/i4season-yuv-320x240.upkt") }, info, videoEndpoint = I4seasonYuvDriver.EP_IN)
+            attach(newSession(replay), replaying = true)
+        }
     }
 
     fun stopReplay() {
-        if (!_ui.value.replaying) return
-        session.stop()
-        attach(newSession(usbDevices), replaying = false)
-        _ui.update { it.copy(image = null) }
+        if (!_ui.value.replaying || switchingSession) return
+        switchSession { attach(newSession(usbDevices), replaying = false) }
+    }
+
+    /**
+     * Tears the current session down off the main thread, then runs [start] (which calls [attach])
+     * back on Main. Nothing here may block Main: the session join waits on an in-flight USB read.
+     */
+    private fun switchSession(start: () -> Unit) {
+        switchingSession = true
+        viewModelScope.launch {
+            try {
+                val joined = withContext(Dispatchers.IO) { session.stopAndJoin() }
+                if (!joined) Log.w(TAG, "session did not stop in time")
+                lastImage = null
+                lastFrame = null
+                start()
+                _ui.update { it.copy(image = null) }
+            } finally {
+                switchingSession = false
+            }
+        }
     }
 
     override fun onCleared() {
-        session.stop()
-        stopRecordingIfActive()
+        // The session join blocks until the current USB read returns; never on Main.
+        val closing = session
+        thread(name = "scope-shutdown") {
+            closing.stop()
+            stopRecordingIfActive()
+        }
         super.onCleared()
     }
 
     companion object {
+        private const val TAG = "ScopeViewModel"
         val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }

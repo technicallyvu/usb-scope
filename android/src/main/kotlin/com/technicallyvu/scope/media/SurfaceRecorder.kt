@@ -21,6 +21,10 @@ class SurfaceRecorder(context: Context, fd: ParcelFileDescriptor, width: Int, he
     var framesWritten: Int = 0
         private set
 
+    /** True when [close] could not stop the encoder cleanly, which means the MP4 was never finalised. */
+    var stopFailed: Boolean = false
+        private set
+
     init {
         recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
         recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -53,7 +57,9 @@ class SurfaceRecorder(context: Context, fd: ParcelFileDescriptor, width: Int, he
         try {
             recorder.stop()          // throws RuntimeException when no frame was ever written
         } catch (e: RuntimeException) {
-            // nothing usable was recorded; the caller discards the file when framesWritten == 0
+            // The moov atom was never written, so whatever is on disk is unplayable: the caller
+            // discards the file when stopFailed (or when framesWritten == 0).
+            stopFailed = true
         } finally {
             surface.release()
             recorder.release()

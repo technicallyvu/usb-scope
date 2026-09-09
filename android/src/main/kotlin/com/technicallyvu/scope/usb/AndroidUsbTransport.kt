@@ -33,15 +33,26 @@ class AndroidUsbTransport(
         if (r < 0) throw UsbException("clearHalt %02X failed".format(endpoint))
     }
 
+    /**
+     * An unknown endpoint address is a wiring bug, not a timeout: the connection throws
+     * [IllegalArgumentException] for it, and it becomes a [UsbException] so the session reports it
+     * instead of silently counting it as "no data yet".
+     */
+    private fun transfer(endpoint: Int, buffer: ByteArray, length: Int, timeoutMs: Int): Int = try {
+        conn.bulkTransfer(endpoint, buffer, length, timeoutMs)
+    } catch (e: IllegalArgumentException) {
+        throw UsbException("bulk transfer %02X rejected".format(endpoint) + ": " + e.message, cause = e)
+    }
+
     override fun bulkWrite(endpoint: Int, data: ByteArray, timeoutMs: Int): Int {
-        val n = conn.bulkTransfer(endpoint, data, data.size, timeoutMs)
+        val n = transfer(endpoint, data, data.size, timeoutMs)
         if (n < 0) throw UsbException("bulkWrite %02X failed".format(endpoint))
         return n
     }
 
     override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
         if (detached) throw UsbException("device detached")
-        val n = conn.bulkTransfer(endpoint, buffer, buffer.size, timeoutMs)
+        val n = transfer(endpoint, buffer, buffer.size, timeoutMs)
         if (n >= 0) {
             consecutiveTimeouts = 0
             return n
