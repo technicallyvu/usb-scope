@@ -8,8 +8,11 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /** Presents one fake useeplus device whose video stream is a looping `.upkt` capture. */
-class ReplayDeviceSource(private val log: Path) : DeviceSource {
-    private val ref = DeviceRef(UsbDeviceInfo(0x2CE3, 0x3828, 0xFF), bus = 0, address = 0)
+class ReplayDeviceSource(
+    private val log: Path,
+    info: UsbDeviceInfo = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF),
+) : DeviceSource {
+    private val ref = DeviceRef(info, bus = 0, address = 0)
 
     override fun list(): List<DeviceRef> = listOf(ref)
 

@@ -29,8 +29,17 @@ class UseeplusDriver(
 
     override val id = "useeplus"
     override val displayName = "useeplus endoscope"
+    override val defaultRotation: Int get() = 90
 
-    override fun matches(info: UsbDeviceInfo): Boolean = (info.vendorId to info.productId) in SUPPORTED_IDS
+    override fun matches(info: UsbDeviceInfo): Boolean {
+        if ((info.vendorId to info.productId) !in SUPPORTED_IDS) return false
+        if (info.interfaces.isEmpty()) return true   // layout unknown: assume the documented two-interface variant
+        val vendorF0 = info.interfaces.filter { it.usbClass == 0xFF && it.subclass == 0xF0 }
+        return vendorF0.any { it.protocol == 0 } && vendorF0.any { it.protocol == 1 }
+    }
+
+    override fun withPacketSink(sink: PacketSink): DeviceDriver =
+        UseeplusDriver(clock, sleep, ioDispatcher, sink)
 
     override fun open(transport: UsbTransport): FrameSource {
         var lastError: UsbException? = null

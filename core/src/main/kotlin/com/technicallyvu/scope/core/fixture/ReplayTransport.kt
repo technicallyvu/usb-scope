@@ -16,6 +16,9 @@ class ReplayTransport(
 ) : UsbTransport {
     val calls = mutableListOf<String>()
 
+    /** Canned replies for device-to-host control requests, keyed by (requestType, request). */
+    val controlResponses = mutableMapOf<Pair<Int, Int>, ByteArray>()
+
     /** Number of times [claimInterface] should throw before succeeding (retry tests). */
     var failuresBeforeSuccess = 0
     var resets = 0
@@ -55,6 +58,15 @@ class ReplayTransport(
         lastTimestamp = p.timestampNanos
         val n = minOf(p.bytes.size, buffer.size)
         p.bytes.copyInto(buffer, 0, 0, n)
+        return n
+    }
+
+    override fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, data: ByteArray, timeoutMs: Int): Int {
+        calls += "ctrl %02X %02X %04X %04X %d".format(requestType and 0xFF, request and 0xFF, value and 0xFFFF, index and 0xFFFF, data.size)
+        if (requestType and 0x80 == 0) return data.size
+        val reply = controlResponses[(requestType and 0xFF) to (request and 0xFF)] ?: return 0
+        val n = minOf(reply.size, data.size)
+        reply.copyInto(data, 0, 0, n)
         return n
     }
 

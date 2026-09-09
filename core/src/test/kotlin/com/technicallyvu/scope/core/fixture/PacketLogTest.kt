@@ -69,4 +69,17 @@ class PacketLogTest {
         t.bulkWrite(0x02, byteArrayOf(0xFF.toByte(), 0x55), 100)
         assertEquals(listOf("claim 0", "alt 1 1", "clearHalt 01", "write 02 FF 55"), t.calls)
     }
+
+    @Test
+    fun `replay transport records control transfers and answers IN requests from canned replies`() {
+        val t = ReplayTransport(emptyList())
+        val out = ByteArray(64)
+        assertEquals(64, t.controlTransfer(0x20, 1, 5, 0, out, 1000))
+        val buf = ByteArray(512)
+        assertEquals(0, t.controlTransfer(0xA0, 0, 5, 0, buf, 1000))           // nothing canned -> 0 bytes
+        t.controlResponses[0xA0 to 0x00] = byteArrayOf(1, 2, 3)
+        assertEquals(3, t.controlTransfer(0xA0, 0, 5, 0, buf, 1000))
+        assertArrayEquals(byteArrayOf(1, 2, 3), buf.copyOf(3))
+        assertEquals(listOf("ctrl 20 01 0005 0000 64", "ctrl A0 00 0005 0000 512", "ctrl A0 00 0005 0000 512"), t.calls)
+    }
 }

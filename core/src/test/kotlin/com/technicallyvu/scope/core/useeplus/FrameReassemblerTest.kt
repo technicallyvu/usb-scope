@@ -2,6 +2,7 @@ package com.technicallyvu.scope.core.useeplus
 
 import com.technicallyvu.scope.core.TestPackets
 import com.technicallyvu.scope.core.TestPackets.packet
+import com.technicallyvu.scope.core.jpegBytes
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -21,7 +22,7 @@ class FrameReassemblerTest {
         assertNull(r.accept(chunk(tail), 200))
         val next = packet(7, frameId = 2, payload = TestPackets.SOI)
         val frame = r.accept(chunk(next), 300)!!
-        assertArrayEquals(jpeg, frame.jpeg)
+        assertArrayEquals(jpeg, frame.jpegBytes())
         assertEquals(300, frame.timestampNanos)
         assertEquals(1, r.framesEmitted)
         assertEquals(0, r.framesDropped)

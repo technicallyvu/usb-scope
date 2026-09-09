@@ -5,8 +5,20 @@ import com.technicallyvu.scope.core.usb.UsbTransport
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
+/** Pixel payload of one frame. Shells decode whichever variant a driver produces. */
+sealed interface FrameData {
+    class Jpeg(val bytes: ByteArray) : FrameData
+
+    /** Packed 4:2:2, byte order Y0 U Y1 V, exactly width*height*2 bytes. */
+    class Yuyv422(val width: Int, val height: Int, val bytes: ByteArray) : FrameData {
+        init {
+            require(bytes.size == width * height * 2) { "YUYV payload ${bytes.size} != ${width}x${height}x2" }
+        }
+    }
+}
+
 class Frame(
-    val jpeg: ByteArray,
+    val data: FrameData,
     val timestampNanos: Long,
     val buttonPressed: Boolean,
     val cameraNumber: Int,
@@ -33,7 +45,11 @@ interface FrameSource : AutoCloseable {
 interface DeviceDriver {
     val id: String
     val displayName: String
+    /** Clockwise rotation that shows this device's picture upright by default. */
+    val defaultRotation: Int get() = 0
     fun matches(info: UsbDeviceInfo): Boolean
     /** Performs the device handshake. Throws [com.technicallyvu.scope.core.usb.UsbException] if the device cannot be started. */
     fun open(transport: UsbTransport): FrameSource
+    /** A copy of this driver that also feeds raw packets to [sink] (fixture capture). */
+    fun withPacketSink(sink: PacketSink): DeviceDriver
 }

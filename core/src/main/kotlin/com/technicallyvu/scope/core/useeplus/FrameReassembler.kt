@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.core.useeplus
 
 import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import java.io.ByteArrayOutputStream
 
 /**
@@ -41,7 +42,7 @@ class FrameReassembler {
         return if (isJpeg(bytes)) {
             framesEmitted++
             Frame(
-                jpeg = bytes,
+                data = FrameData.Jpeg(bytes),
                 timestampNanos = nowNanos,
                 buttonPressed = (flagsOr and UseeplusPacket.BUTTON_MASK) != 0,
                 cameraNumber = cameraNumber,

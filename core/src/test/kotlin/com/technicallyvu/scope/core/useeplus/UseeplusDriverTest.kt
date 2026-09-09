@@ -4,8 +4,10 @@ import com.technicallyvu.scope.core.TestPackets
 import com.technicallyvu.scope.core.driver.PacketSink
 import com.technicallyvu.scope.core.fixture.LoggedPacket
 import com.technicallyvu.scope.core.fixture.ReplayTransport
+import com.technicallyvu.scope.core.jpegBytes
 import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
+import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -84,8 +86,8 @@ class UseeplusDriverTest {
         val t = ReplayTransport(stream(5))
         val source = driver().open(t)
         val frames = runBlocking { source.frames.take(3).toList() }
-        assertEquals(listOf<Byte>(3, 4, 5), frames.map { it.jpeg[2] })
-        assertArrayEquals(TestPackets.SOI + ByteArray(30) { 3 } + TestPackets.EOI, frames[0].jpeg)
+        assertEquals(listOf<Byte>(3, 4, 5), frames.map { it.jpegBytes()[2] })
+        assertArrayEquals(TestPackets.SOI + ByteArray(30) { 3 } + TestPackets.EOI, frames[0].jpegBytes())
         assertEquals(3, source.stats.value.framesEmitted)
         assertEquals(0, source.stats.value.framesDropped)
     }
@@ -120,5 +122,25 @@ class UseeplusDriverTest {
         val t = ReplayTransport(emptyList())
         driver().open(t).close()
         assertEquals(listOf("release 1", "release 0", "close"), t.calls.takeLast(3))
+    }
+
+    @Test
+    fun `matches on interface layout when it is known`() {
+        val d = driver()
+        val iap = UsbInterfaceInfo(0, 0xFF, 0xF0, 0)
+        val video = UsbInterfaceInfo(1, 0xFF, 0xF0, 1)
+        assertTrue(d.matches(UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(iap, video))))
+        assertFalse(d.matches(UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(video))))   // lone protocol-1 = YUV type
+        assertEquals(90, d.defaultRotation)
+    }
+
+    @Test
+    fun `withPacketSink keeps the same identity but delivers packets`() {
+        var count = 0
+        val d = driver().withPacketSink { _, _, _ -> count++ }
+        assertEquals("useeplus", d.id)
+        val source = d.open(ReplayTransport(stream(3)))
+        runCatching { runBlocking { source.frames.toList() } }
+        assertTrue(count > 0)
     }
 }

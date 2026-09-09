@@ -37,3 +37,7 @@ object TestPackets {
         )
     }
 }
+
+/** JPEG bytes of a frame that must carry JPEG data. */
+fun com.technicallyvu.scope.core.driver.Frame.jpegBytes(): ByteArray =
+    (data as com.technicallyvu.scope.core.driver.FrameData.Jpeg).bytes
