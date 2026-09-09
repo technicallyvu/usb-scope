@@ -1,7 +1,9 @@
 # USB Scope (working name)
 
 Privacy-first, open-source viewer for cheap USB endoscopes that ship with untrusted vendor apps.
-First supported device: Geek szitman "supercamera" (USB 2CE3:3828 / 0329:2022, useeplus protocol).
+First supported device: USB 2CE3:3828 / 0329:2022 endoscopes. Verified on hardware in the `i4season-yuv`
+personality (single interface, YUYV); the `useeplus` personality (dual interface, MJPEG) is implemented
+from public protocol documentation and has not been exercised on a device here.
 
 Phase 1 = Windows dev bench. See `docs/superpowers/specs/` for the design and `docs/windows-setup.md`
 for the one-time WinUSB driver step.

@@ -21,7 +21,22 @@ leaves a playable clip.
 - **Compose rendering.** `BufferedImage.toComposeImageBitmap()` rendered TYPE_3BYTE_BGR frames as solid green;
   frames are converted to TYPE_INT_ARGB first.
 
-## Deferred minor findings from task reviews
-See `.superpowers/sdd/progress.md` (local) for the per-task list; notable ones: drop counter double-counts when
-garbage precedes a false header; `WindowsDeviceCheck` has no read timeout; `--seconds` parsing is not validated;
-stray zero-frame mp4 stub if a recording is discarded during encoder start-up.
+- **Naming.** Package and class names keep their protocol/OEM identifiers (`useeplus`, `i4season`) because they
+  name the wire protocol and are the terms the public documentation uses. User-visible strings stay
+  vendor-neutral: the drivers report "MJPEG endoscope (dual interface)" and "YUV endoscope (single interface)".
+
+## Deferred minor findings from the branch reviews
+Carried into the Phase 2 backlog; none block Phase 1 acceptance.
+
+- Drop counter double-counts when garbage precedes a false header.
+- Stray zero-frame mp4 when a recording start loses the race with a stop.
+- `Controls` recomposes on every frame.
+- `JFileChooser` blocks the render loop and is opened without an owner window.
+- `--replay` with a missing file loops in `Failed` and re-parses the log on every open attempt.
+- Parser `MAX_READ` duplicates `CHUNK_SIZE`.
+- The fps fixture test measures wall clock; assert against the recorded packet timestamps instead.
+- `toggleRecording`'s stop-branch comment is misleading.
+- `ReplayDeviceSource` uses `java.nio.file` in core `main`; move it to a testing source set before Android.
+- `FrameData.Yuyv422` allocates a fresh array per frame; consider a buffer ring on Android.
+- Enable the Gradle configuration cache.
+- Turn on `allWarningsAsErrors` for `core` once it is warning-clean.

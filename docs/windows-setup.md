@@ -23,7 +23,8 @@ Expected: `Status OK`, `Class USBDevice`. Then:
 
     .\gradlew.bat :desktop:probe --args="--list"
 
-should list `2CE3:3828 ... <- useeplus`.
+should list `2CE3:3828 ... <- i4season-yuv` (the verified single-interface YUV personality). A unit that
+enumerates two vendor interfaces instead is matched by the documentation-derived `useeplus` driver.
 
 Note: `probe --list` shows the endoscope even before the driver is bound (libusb can read its
 descriptors through the hub), but opening it fails with `LIBUSB_ERROR_NOT_SUPPORTED` until WinUSB
