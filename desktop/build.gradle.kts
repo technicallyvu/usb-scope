@@ -49,4 +49,5 @@ tasks.register<JavaExec>("probe") {
     description = "List USB devices, stream from the endoscope, optionally record a .upkt fixture"
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("com.technicallyvu.scope.desktop.ProbeKt")
+    workingDir = rootDir   // so --record paths resolve against the repo root
 }
