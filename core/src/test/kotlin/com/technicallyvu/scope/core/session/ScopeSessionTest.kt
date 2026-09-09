@@ -23,12 +23,17 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class ScopeSessionTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val yuvInfo = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
     private val ref = DeviceRef(yuvInfo, 0, 1)
+    // Released in tearDown() so a StuckTransport's blocked bulkRead thread doesn't wedge the
+    // shared Default dispatcher pool after the test that created it finishes.
+    private val stuckLatch = CountDownLatch(1)
 
     private class FakeDevices(var refs: List<DeviceRef>, var opener: () -> UsbTransport) : DeviceSource {
         override fun list() = refs
@@ -59,13 +64,13 @@ class ScopeSessionTest {
     }
 
     /**
-     * A transport that wedges: every [bulkRead] sleeps far longer than any stop timeout and [close]
-     * does nothing, so the frame source cannot take its io lock and the session job outlives a
-     * short join.
+     * A transport that wedges: every [bulkRead] blocks far longer than any stop timeout (until
+     * [latch] is counted down, or 5s pass) and [close] does nothing, so the frame source cannot
+     * take its io lock and the session job outlives a short join.
      */
-    private class StuckTransport(private val delegate: UsbTransport) : UsbTransport by delegate {
+    private class StuckTransport(private val delegate: UsbTransport, private val latch: CountDownLatch) : UsbTransport by delegate {
         override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
-            Thread.sleep(5_000)
+            latch.await(5, TimeUnit.SECONDS)
             return 0
         }
         override fun close() { /* deliberately ignored */ }
@@ -87,7 +92,10 @@ class ScopeSessionTest {
     private fun session(devices: DeviceSource, sink: FrameSink, hint: () -> Boolean = { false }) =
         ScopeSession(devices, listOf(I4seasonYuvDriver(ioDispatcher = Dispatchers.Default)), scope, sink, driverHintCheck = hint, pollMillis = 50)
 
-    @AfterEach fun tearDown() = scope.cancel()
+    @AfterEach fun tearDown() {
+        stuckLatch.countDown()
+        scope.cancel()
+    }
 
     @Test
     fun `no device reports NoDevice with the hint`(): Unit = runBlocking {
@@ -215,7 +223,7 @@ class ScopeSessionTest {
 
     @Test
     fun `stopAndJoin returns false when the transport cannot close in time`(): Unit = runBlocking {
-        val devices = FakeDevices(listOf(ref)) { StuckTransport(stream(4, loop = true)) }
+        val devices = FakeDevices(listOf(ref)) { StuckTransport(stream(4, loop = true), stuckLatch) }
         val s = session(devices, CountingSink())
         s.start()
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
@@ -224,5 +232,18 @@ class ScopeSessionTest {
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
         assertFalse(joined, "expected stopAndJoin to report the join timed out")
         assertTrue(elapsedMs < 2_000, "stopAndJoin should give up after its timeout, took ${elapsedMs}ms")
+    }
+
+    @Test
+    fun `start after a timed-out stopAndJoin does not start a second loop`(): Unit = runBlocking {
+        val opens = AtomicInteger()
+        val devices = FakeDevices(listOf(ref)) { opens.incrementAndGet(); StuckTransport(stream(4, loop = true), stuckLatch) }
+        val s = session(devices, CountingSink())
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertFalse(s.stopAndJoin(200), "expected stopAndJoin to report the join timed out")
+        s.start()
+        kotlinx.coroutines.delay(500)
+        assertEquals(1, opens.get(), "start() after a timed-out stopAndJoin must not launch a second loop")
     }
 }

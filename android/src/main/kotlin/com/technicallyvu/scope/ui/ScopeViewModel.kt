@@ -46,16 +46,15 @@ data class UiState(
     val replaying: Boolean = false,
 )
 
-class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
+class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     private val usbManager = app.getSystemService(UsbManager::class.java)
     private val usbDevices = AndroidDeviceSource(usbManager)
     private val saver = MediaStoreSaver(app.contentResolver)
-    private val bitmaps = FrameBitmaps()
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
 
-    private lateinit var session: ScopeSession
+    @Volatile private lateinit var session: ScopeSession
     private var stateJob: Job? = null
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: Bitmap? = null
@@ -67,25 +66,57 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
     private var recorderGeneration = 0L
     /** Guards against a second replay start/stop while the previous session is still winding down. */
     private var switchingSession = false
+    /** Identifies the current session's sink so a stale sink from a swapped-out session (see
+     * [attach]) drops frames instead of racing the new one. Mutated only from [attach] on Main. */
+    @Volatile private var currentSessionToken = 0L
+    private var nextSessionToken = 0L
 
     init {
-        attach(newSession(usbDevices), replaying = false)
+        attach(usbDevices, replaying = false)
     }
 
-    private fun newSession(devices: DeviceSource) = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = this)
+    /**
+     * A per-session [FrameSink]. [attach] mints a fresh one (with its own [FrameBitmaps]) for
+     * every [ScopeSession] it creates; [token] lets it recognize when its session has been swapped
+     * out (e.g. by a replay start/stop) and ignore any frames/button events still in flight from
+     * the old session's worker thread.
+     */
+    private inner class SessionSink(private val token: Long, private val bitmaps: FrameBitmaps) : FrameSink {
+        override fun onFrame(frame: Frame, state: SessionState) {
+            if (token != currentSessionToken) return
+            lastFrame = frame.data
+            val bmp = bitmaps.toBitmap(frame.data) ?: return
+            val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
+            lastImage = shown
+            synchronized(recorderLock) {
+                recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
+            }
+            _ui.update { it.copy(image = shown) }
+        }
+
+        override fun onButtonSnapshot() {
+            if (token != currentSessionToken) return
+            snapshot()
+        }
+    }
 
     /**
-     * Cancels the previous state collector (if any), swaps in [newSessionInstance] as the current
-     * [session], starts it, and launches exactly one collector that mirrors its state into [_ui].
-     * The USB-permission device is surfaced only while a live (non-replay) session is active.
+     * Cancels the previous state collector (if any), builds a fresh [ScopeSession] over [devices]
+     * with its own [SessionSink] (and thus its own [FrameBitmaps] and identity token), stores it as
+     * the current [session], starts it, and launches exactly one collector that mirrors its state
+     * into [_ui]. The USB-permission device is surfaced only while a live (non-replay) session is
+     * active.
      */
-    private fun attach(newSessionInstance: ScopeSession, replaying: Boolean) {
+    private fun attach(devices: DeviceSource, replaying: Boolean) {
         stateJob?.cancel()
-        session = newSessionInstance
+        val token = ++nextSessionToken
+        currentSessionToken = token
+        val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = SessionSink(token, FrameBitmaps()))
+        session = newSession
         _ui.update { it.copy(replaying = replaying) }
-        session.start()
+        newSession.start()
         stateJob = viewModelScope.launch {
-            session.state.collect { s ->
+            newSession.state.collect { s ->
                 val streaming = s.connection is ConnectionState.Streaming
                 // Anything but Streaming means the last frame is stale (unplug, error, reconnect):
                 // drop it so the view falls back to its status text instead of a frozen picture.
@@ -103,20 +134,6 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
             }
         }
     }
-
-    // ---- FrameSink (worker thread) ----
-    override fun onFrame(frame: Frame, state: SessionState) {
-        lastFrame = frame.data
-        val bmp = bitmaps.toBitmap(frame.data) ?: return
-        val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
-        lastImage = shown
-        synchronized(recorderLock) {
-            recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
-        }
-        _ui.update { it.copy(image = shown) }
-    }
-
-    override fun onButtonSnapshot() = snapshot()
 
     // ---- actions (main thread) ----
     fun rotate() = session.rotate()
@@ -145,23 +162,44 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
         }
     }
 
+    /**
+     * Guards a start or stop transition in flight so a second tap (e.g. a fast double-tap on
+     * Stop) is ignored instead of racing the in-progress one. Set on Main before launching the
+     * transition, cleared in a `finally` once the launched coroutine finishes.
+     */
+    @Volatile private var recordingTransition = false
+
     fun toggleRecording() {
-        val active = synchronized(recorderLock) { recorder != null }
-        // Stopping touches MediaRecorder and MediaStore; keep it off the main thread.
-        if (active) { viewModelScope.launch(Dispatchers.IO) { stopRecordingIfActive() }; return }
-        val img = lastImage ?: return
-        val generation = synchronized(recorderLock) { recorderGeneration }
-        val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
-        val video = runCatching { saver.createVideo(name) }.getOrElse { e -> _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return }
-        val created = runCatching { SurfaceRecorder(getApplication(), video.fd, img.width, img.height) }
-            .getOrElse { e -> saver.finishVideo(video, keep = false); _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return }
-        synchronized(recorderLock) {
-            if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return }
-            recorder = created
-            pendingVideo = video
+        if (recordingTransition) return
+        val active = recorder != null
+        recordingTransition = true
+        // Both start and stop touch MediaRecorder/MediaStore (and, for start, SurfaceRecorder
+        // construction); keep all of it off the main thread.
+        if (active) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try { stopRecordingIfActive() } finally { recordingTransition = false }
+            }
+            return
         }
-        session.setRecording(true)
-        // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val img = lastImage ?: return@launch
+                val generation = synchronized(recorderLock) { recorderGeneration }
+                val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
+                val video = runCatching { saver.createVideo(name) }.getOrElse { e -> _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                val created = runCatching { SurfaceRecorder(getApplication(), video.fd, img.width, img.height) }
+                    .getOrElse { e -> saver.finishVideo(video, keep = false); _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                synchronized(recorderLock) {
+                    if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
+                    recorder = created
+                    pendingVideo = video
+                }
+                session.setRecording(true)
+                // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
+            } finally {
+                recordingTransition = false
+            }
+        }
     }
 
     private fun stopRecordingIfActive() = synchronized(recorderLock) { stopRecordingLocked(keep = true) }
@@ -200,13 +238,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
         switchSession {
             val info = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
             val replay = ReplayDeviceSource({ app.assets.open("fixtures/i4season-yuv-320x240.upkt") }, info, videoEndpoint = I4seasonYuvDriver.EP_IN)
-            attach(newSession(replay), replaying = true)
+            attach(replay, replaying = true)
         }
     }
 
     fun stopReplay() {
         if (!_ui.value.replaying || switchingSession) return
-        switchSession { attach(newSession(usbDevices), replaying = false) }
+        switchSession { attach(usbDevices, replaying = false) }
     }
 
     /**
@@ -233,8 +271,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app), FrameSink {
         // The session join blocks until the current USB read returns; never on Main.
         val closing = session
         thread(name = "scope-shutdown") {
-            closing.stop()
             stopRecordingIfActive()
+            closing.stop()
         }
         super.onCleared()
     }

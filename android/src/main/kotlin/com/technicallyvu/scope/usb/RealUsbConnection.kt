@@ -46,7 +46,8 @@ class RealUsbConnection(private val device: UsbDevice, private val connection: U
     override fun claimInterface(number: Int): Boolean =
         iface(number, 0)?.let { connection.claimInterface(it, true).also { ok -> if (ok) selectedAlt[number] = 0 } } ?: false
 
-    override fun releaseInterface(number: Int): Boolean = iface(number, 0)?.let { connection.releaseInterface(it) } ?: false
+    override fun releaseInterface(number: Int): Boolean =
+        iface(number, 0)?.let { connection.releaseInterface(it).also { ok -> if (ok) selectedAlt.remove(number) } } ?: false
 
     override fun setInterface(number: Int, alt: Int): Boolean =
         iface(number, alt)?.let { connection.setInterface(it).also { ok -> if (ok) selectedAlt[number] = alt } } ?: false

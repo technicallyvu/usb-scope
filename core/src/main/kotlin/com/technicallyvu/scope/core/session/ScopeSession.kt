@@ -98,12 +98,15 @@ class ScopeSession(
      * Cancels the loop and suspends up to [timeoutMillis] waiting for the transport to close.
      * Returns true if the join completed within the timeout, false if it timed out. Preferred over
      * [stop] on Android, where nothing may block the main thread.
+     *
+     * On a timeout, [job] is deliberately left set rather than nulled, so a subsequent [start]
+     * call is a no-op instead of racing a second loop against the one still winding down.
      */
     suspend fun stopAndJoin(timeoutMillis: Long = 3_000): Boolean {
         val j = job ?: return true
         j.cancel()
         val joined = withTimeoutOrNull(timeoutMillis) { j.join() } != null
-        job = null
+        if (joined) job = null
         return joined
     }
 
