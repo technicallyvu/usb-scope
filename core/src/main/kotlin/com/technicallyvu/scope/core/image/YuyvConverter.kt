@@ -10,7 +10,8 @@ object YuyvConverter {
         val src = frame.bytes
         var si = 0
         var di = 0
-        while (si + 3 < src.size && di < pixels) {
+        // di + 1 < pixels: each iteration writes two pixels, so an odd-width frame must not run past the end.
+        while (si + 3 < src.size && di + 1 < pixels) {
             val y0 = src[si].toInt() and 0xFF
             val u = src[si + 1].toInt() and 0xFF
             val y1 = src[si + 2].toInt() and 0xFF

@@ -95,18 +95,25 @@ class ScopeSession(
     }
 
     /**
-     * Cancels the loop and blocks the calling thread up to [timeoutMillis] waiting for the
-     * transport to close. Returns true if the join completed within the timeout, false if it
-     * timed out. Safe to call from any thread; on Android call it off the main thread or from a
-     * lifecycle teardown that tolerates blocking.
+     * Cancels the loop and suspends up to [timeoutMillis] waiting for the transport to close.
+     * Returns true if the join completed within the timeout, false if it timed out. Preferred over
+     * [stop] on Android, where nothing may block the main thread.
      */
-    fun stop(timeoutMillis: Long = 3_000): Boolean {
+    suspend fun stopAndJoin(timeoutMillis: Long = 3_000): Boolean {
         val j = job ?: return true
         j.cancel()
-        val joined = runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } } != null
+        val joined = withTimeoutOrNull(timeoutMillis) { j.join() } != null
         job = null
         return joined
     }
+
+    /**
+     * Cancels the loop and blocks the calling thread up to [timeoutMillis] waiting for the
+     * transport to close. Returns true if the join completed within the timeout, false if it
+     * timed out. Safe to call from any thread; on Android call it off the main thread or from a
+     * lifecycle teardown that tolerates blocking — otherwise use [stopAndJoin].
+     */
+    fun stop(timeoutMillis: Long = 3_000): Boolean = runBlocking { stopAndJoin(timeoutMillis) }
 
     fun rotate() = _state.update { if (it.recording) it else it.copy(rotation = (it.rotation + 90) % 360) }
     fun toggleMirror() = _state.update { if (it.recording) it else it.copy(mirror = !it.mirror) }
@@ -152,11 +159,24 @@ class ScopeSession(
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
         _state.update { it.copy(stats = stats) }
-        runCatching { sink.onFrame(frame, _state.value) }.onFailure { /* drop the frame; the shell owns its own error reporting */ }
+        // Only Exception is swallowed (never Error, never cancellation): the shell owns its own error reporting.
+        try {
+            sink.onFrame(frame, _state.value)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // drop the frame and keep streaming
+        }
         val last = lastButtonNanos
         if (frame.buttonPressed && !prevButton && (last == null || frame.timestampNanos - last > BUTTON_DEBOUNCE_NANOS)) {
             lastButtonNanos = frame.timestampNanos
-            runCatching { sink.onButtonSnapshot() }.onFailure { /* drop the frame; the shell owns its own error reporting */ }
+            try {
+                sink.onButtonSnapshot()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // drop the button event and keep streaming
+            }
         }
         prevButton = frame.buttonPressed
     }

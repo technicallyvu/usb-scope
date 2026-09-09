@@ -20,6 +20,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
@@ -55,6 +56,19 @@ class ScopeSessionTest {
             if (endNow) throw UsbException("ended")
             return delegate.bulkRead(endpoint, buffer, timeoutMs)
         }
+    }
+
+    /**
+     * A transport that wedges: every [bulkRead] sleeps far longer than any stop timeout and [close]
+     * does nothing, so the frame source cannot take its io lock and the session job outlives a
+     * short join.
+     */
+    private class StuckTransport(private val delegate: UsbTransport) : UsbTransport by delegate {
+        override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
+            Thread.sleep(5_000)
+            return 0
+        }
+        override fun close() { /* deliberately ignored */ }
     }
 
     private class CountingSink : FrameSink {
@@ -169,5 +183,46 @@ class ScopeSessionTest {
         s.start()
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         assertTrue(s.stop(), "expected stop() to report the join completed in time")
+    }
+
+    @Test
+    fun `rotation survives a device that keeps failing to open`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val first = EndableTransport(stream(6, loop = true))
+        val devices = FakeDevices(listOf(ref)) { first }
+        val s = session(devices, sink)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        val fromDriver = s.state.value.rotation
+        s.rotate(); s.rotate()
+        val chosen = s.state.value.rotation
+        assertTrue(chosen != fromDriver, "rotate() twice should have moved off the driver default $fromDriver")
+
+        // The device now refuses to open, poll after poll.
+        val attempts = AtomicInteger()
+        devices.opener = { attempts.incrementAndGet(); throw UsbException("no permission") }
+        first.endNow = true
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Failed } }
+        withTimeout(5_000) { while (attempts.get() < 3) kotlinx.coroutines.delay(10) }
+        assertEquals(chosen, s.state.value.rotation, "a failing open must not reset the user's rotation")
+
+        // And it is still the user's rotation once the device comes back.
+        devices.opener = { stream(6, loop = true) }
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(chosen, s.state.value.rotation, "reconnecting must not reset the user's rotation")
+        s.stop()
+    }
+
+    @Test
+    fun `stopAndJoin returns false when the transport cannot close in time`(): Unit = runBlocking {
+        val devices = FakeDevices(listOf(ref)) { StuckTransport(stream(4, loop = true)) }
+        val s = session(devices, CountingSink())
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        val started = System.nanoTime()
+        val joined = s.stopAndJoin(200)
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertFalse(joined, "expected stopAndJoin to report the join timed out")
+        assertTrue(elapsedMs < 2_000, "stopAndJoin should give up after its timeout, took ${elapsedMs}ms")
     }
 }
