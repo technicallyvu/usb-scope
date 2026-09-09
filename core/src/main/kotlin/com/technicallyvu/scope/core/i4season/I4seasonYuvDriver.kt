@@ -108,7 +108,7 @@ class I4seasonFrameSource(
             val now = clock()
             packetSink?.onPacket(buf, n, now)
             for (frame in parser.accept(buf, n, now)) {
-                _stats.value = StreamStats(fps.tick(now), parser.framesEmitted, parser.framesDropped, parser.bytesReceived)
+                _stats.value = StreamStats(fps.tick(now), parser.framesEmitted, parser.framesDropped, parser.framesPartial, parser.bytesReceived)
                 emit(frame)
             }
         }

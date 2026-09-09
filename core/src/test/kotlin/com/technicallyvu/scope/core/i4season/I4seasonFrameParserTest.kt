@@ -93,4 +93,48 @@ class I4seasonFrameParserTest {
         assertEquals(2, frames.size)
         assertEquals(0, p.framesDropped)
     }
+
+    @Test
+    fun `a short frame is padded by repeating its last complete row`() {
+        val sw = 4; val sh = 4   // row = 8 bytes, payload 32 bytes
+        val shortPayload = ByteArray(8) { 0x11 } + ByteArray(8) { 0x22 } + ByteArray(4) { 0x33 }
+        val short = I4seasonTestFrames.shortFrame(sw, sh, shortPayload)
+        val full = I4seasonTestFrames.frame(sw, sh, fill = 0x44)
+        val p = I4seasonFrameParser(sw, sh)
+        val frames = feed(p, short + full, 7)
+        assertEquals(2, frames.size)
+        val expected = ByteArray(8) { 0x11 } + ByteArray(8) { 0x22 } + ByteArray(8) { 0x22 } + ByteArray(8) { 0x22 }
+        assertArrayEquals(expected, (frames[0].data as FrameData.Yuyv422).bytes)
+        assertArrayEquals(ByteArray(32) { 0x44 }, (frames[1].data as FrameData.Yuyv422).bytes)
+        assertEquals(1, p.framesPartial)
+        assertEquals(0, p.framesDropped)
+    }
+
+    @Test
+    fun `a short frame with less than one row is zero padded`() {
+        val sw = 4; val sh = 4
+        val shortPayload = ByteArray(3) { 0x33 }
+        val short = I4seasonTestFrames.shortFrame(sw, sh, shortPayload)
+        val full = I4seasonTestFrames.frame(sw, sh, fill = 0x44)
+        val p = I4seasonFrameParser(sw, sh)
+        val frames = feed(p, short + full, 7)
+        assertEquals(2, frames.size)
+        assertArrayEquals(ByteArray(32), (frames[0].data as FrameData.Yuyv422).bytes)
+        assertEquals(1, p.framesPartial)
+    }
+
+    @Test
+    fun `a genuine false lock counts exactly one drop`() {
+        // Already aligned on a fake header (no leading garbage): a scan restart here would count a
+        // second resync, so the junk must be long enough that the parser resolves it in one hop.
+        val fakeHeader = byteArrayOf(0xDD.toByte(), 0xCC.toByte(), 0x01, 0x00) + ByteArray(507) { 0xAA.toByte() }
+        val junk = ByteArray(600) { 0x00 }   // longer than frameSize + MAGIC_SIZE: no magic can hide in it
+        val real = I4seasonTestFrames.frame(w, h, fill = 0x55)
+        val p = I4seasonFrameParser(w, h)
+        val frames = feed(p, fakeHeader + junk + real, 64)
+        assertEquals(1, frames.size)
+        assertArrayEquals(ByteArray(16) { 0x55 }, (frames[0].data as FrameData.Yuyv422).bytes)
+        assertEquals(1, p.framesDropped)
+        assertEquals(0, p.framesPartial)
+    }
 }

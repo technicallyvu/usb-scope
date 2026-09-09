@@ -78,7 +78,7 @@ fun main(args: Array<String>) {
                     if (now - lastReport >= 1_000_000_000L) {
                         val st = source.stats.value
                         val kind = when (val d = f.data) { is FrameData.Jpeg -> "jpeg ${d.bytes.size} B"; is FrameData.Yuyv422 -> "yuyv ${d.width}x${d.height}" }
-                        println("  %.1f fps  frames=%d dropped=%d bytes=%d  %s".format(st.fps, st.framesEmitted, st.framesDropped, st.bytesReceived, kind))
+                        println("  %.1f fps  frames=%d partial=%d dropped=%d bytes=%d  %s".format(st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived, kind))
                         lastReport = now
                     }
                 }

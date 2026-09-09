@@ -29,6 +29,7 @@ data class StreamStats(
     val fps: Double = 0.0,
     val framesEmitted: Long = 0,
     val framesDropped: Long = 0,
+    val framesPartial: Long = 0,
     val bytesReceived: Long = 0,
 )
 

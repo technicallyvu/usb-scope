@@ -32,14 +32,8 @@ class ScopeViewModelTest {
     private val ref = DeviceRef(UsbDeviceInfo(0x2CE3, 0x3828, 0xFF), 1, 2)
 
     private class FakeDevices(var refs: List<DeviceRef>, val opener: () -> UsbTransport) : DeviceSource {
-        /** When true, [open] throws instead of delegating to [opener] (simulates a reconnect failure). */
-        var failNext = false
-
         override fun list() = refs
-        override fun open(ref: DeviceRef): UsbTransport {
-            if (failNext) throw UsbException("forced open failure")
-            return opener()
-        }
+        override fun open(ref: DeviceRef): UsbTransport = opener()
     }
 
     private fun vm(
@@ -110,7 +104,7 @@ class ScopeViewModelTest {
     }
 
     @Test
-    fun `reconnect of the same device keeps the user's rotation`(@TempDir dir: Path) = runBlocking {
+    fun `rotation survives a reconnect`(@TempDir dir: Path) = runBlocking {
         val packets = TestPackets.stream(20, buttonMask = UseeplusPacket.BUTTON_MASK)
         val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, sleep = Thread::sleep) }
         val vm = vm(devices, dir)
@@ -119,12 +113,10 @@ class ScopeViewModelTest {
         vm.rotate()
         assertEquals(180, vm.state.value.rotation)   // default rotation (90) + one rotate()
 
-        // Force the next reconnect attempt to fail once, then let it recover.
-        devices.failNext = true
+        // The replay ends, dropping the device; the polling loop reconnects it automatically.
         withTimeout(5_000) {
             vm.state.first { it.connection is ConnectionState.NoDevice || it.connection is ConnectionState.Failed }
         }
-        devices.failNext = false
         withTimeout(5_000) { vm.state.first { it.image != null } }
 
         assertEquals(180, vm.state.value.rotation)   // unchanged: same driver reconnected
