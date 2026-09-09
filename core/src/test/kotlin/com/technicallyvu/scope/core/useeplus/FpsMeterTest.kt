@@ -21,11 +21,20 @@ class FpsMeterTest {
     }
 
     @Test
+    fun `a long stall drops the rate to zero`() {
+        val m = FpsMeter(windowNanos = 1_000 * ms)
+        m.tick(0)
+        m.tick(100 * ms)
+        assertEquals(0.0, m.tick(5_000 * ms))   // only the newest sample is inside the window
+    }
+
+    @Test
     fun `old samples fall out of the window`() {
         val m = FpsMeter(windowNanos = 1_000 * ms)
         m.tick(0)
         m.tick(100 * ms)
-        val fps = m.tick(5_000 * ms)   // only the last two samples remain: 4.9 s apart
-        assertEquals(1.0 / 4.9, fps, 0.01)
+        m.tick(1_050 * ms)
+        val fps = m.tick(1_100 * ms)   // the sample at 0 falls out; 100, 1050, 1100 remain: 2 intervals over 1.0 s
+        assertEquals(2.0, fps, 0.01)
     }
 }
