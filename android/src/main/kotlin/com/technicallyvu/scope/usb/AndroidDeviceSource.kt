@@ -10,9 +10,7 @@ import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.core.usb.UsbTransport
 import java.util.concurrent.ConcurrentHashMap
 
-// core.usb.UsbException is not `open`, so it cannot be subclassed here; UsbPermissionException
-// extends Exception directly instead (deviation from the brief, recorded in the task report).
-class UsbPermissionException(val device: UsbDevice) : Exception("USB permission not granted for ${device.deviceName}")
+class UsbPermissionException(val device: UsbDevice) : UsbException("USB permission not granted for ${device.deviceName}")
 
 /** [DeviceSource] over [UsbManager]. `DeviceRef.address` carries Android's deviceId. */
 class AndroidDeviceSource(private val usbManager: UsbManager) : DeviceSource {
