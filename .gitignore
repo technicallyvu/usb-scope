@@ -1,0 +1,10 @@
+.gradle/
+build/
+.kotlin/
+.idea/
+*.iml
+out/
+local.properties
+*.log
+# Local working area: holds the decompiled vendor app. Never commit.
+.superpowers/
