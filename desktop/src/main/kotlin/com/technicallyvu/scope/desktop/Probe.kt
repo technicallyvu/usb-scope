@@ -3,6 +3,7 @@ package com.technicallyvu.scope.desktop
 import com.technicallyvu.scope.core.driver.DriverRegistry
 import com.technicallyvu.scope.core.driver.PacketSink
 import com.technicallyvu.scope.core.fixture.PacketLogWriter
+import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.useeplus.UseeplusDriver
 import com.technicallyvu.scope.core.useeplus.UseeplusPacket
 import com.technicallyvu.scope.desktop.usb.LibUsbDevices
@@ -54,7 +55,16 @@ fun main(args: Array<String>) {
 
         val driver = UseeplusDriver(packetSink = sink)
         println("Opening ${ref.info.idString} with ${driver.id} ...")
-        val source = driver.open(devices.open(ref))
+        val transport = try {
+            devices.open(ref)
+        } catch (e: UsbException) {
+            System.err.println("Could not open ${ref.info.idString}: ${e.message}")
+            if (WindowsDeviceCheck.isPresentWithoutDriver(UseeplusDriver.SUPPORTED_IDS)) {
+                System.err.println("Windows has no WinUSB driver bound to the endoscope. Follow docs/windows-setup.md (Zadig), re-plug, and try again.")
+            }
+            exitProcess(2)
+        }
+        val source = driver.open(transport)
         println("Streaming for $seconds s" + (record?.let { ", recording raw packets to $it" } ?: "") + ". Press the cable button a few times.")
 
         var frames = 0L
