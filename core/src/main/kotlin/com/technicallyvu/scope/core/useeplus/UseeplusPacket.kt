@@ -1,7 +1,7 @@
 package com.technicallyvu.scope.core.useeplus
 
 /** One parsed bulk-IN packet: the camera header fields plus the JPEG payload slice. */
-data class UseeplusChunk(
+class UseeplusChunk(
     val channelId: Int,
     val frameId: Int,
     val cameraNumber: Int,
