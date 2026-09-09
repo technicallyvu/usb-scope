@@ -28,12 +28,12 @@ class LibUsbDevices : DeviceSource, AutoCloseable {
     }
 
     override fun list(): List<DeviceRef> = withDeviceList { list ->
-        list.map { dev -> DeviceRef(describe(dev), LibUsb.getBusNumber(dev).toInt(), LibUsb.getDeviceAddress(dev).toInt()) }
+        list.map { dev -> DeviceRef(describe(dev), LibUsb.getBusNumber(dev), LibUsb.getDeviceAddress(dev)) }
     }
 
     override fun open(ref: DeviceRef): UsbTransport = withDeviceList { list ->
         val dev = list.firstOrNull {
-            LibUsb.getBusNumber(it).toInt() == ref.bus && LibUsb.getDeviceAddress(it).toInt() == ref.address
+            LibUsb.getBusNumber(it) == ref.bus && LibUsb.getDeviceAddress(it) == ref.address
         } ?: throw UsbException("device ${ref.info.idString} is no longer attached")
         val handle = DeviceHandle()
         val r = LibUsb.open(dev, handle)
@@ -64,7 +64,9 @@ class LibUsbDevices : DeviceSource, AutoCloseable {
         if (r != LibUsb.SUCCESS) return emptyList()
         try {
             return cfg.iface().mapNotNull { i ->
-                i.altsetting().firstOrNull()?.let { a ->
+                // Drivers match on the default alternate setting; libusb does not promise it comes first.
+                val alt0 = i.altsetting().firstOrNull { it.bAlternateSetting().toInt() == 0 } ?: i.altsetting().firstOrNull()
+                alt0?.let { a ->
                     UsbInterfaceInfo(
                         number = a.bInterfaceNumber().toInt() and 0xFF,
                         usbClass = a.bInterfaceClass().toInt() and 0xFF,

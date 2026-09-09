@@ -2,6 +2,7 @@ package com.technicallyvu.scope.desktop
 
 import com.technicallyvu.scope.core.driver.DriverRegistry
 import com.technicallyvu.scope.core.driver.FrameData
+import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.PacketSink
 import com.technicallyvu.scope.core.fixture.PacketLogWriter
 import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
@@ -12,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.Locale
 import kotlin.system.exitProcess
 
 /**
@@ -20,7 +22,11 @@ import kotlin.system.exitProcess
  *   probe [--seconds N] [--record path.upkt]       stream from the first supported device
  */
 fun main(args: Array<String>) {
-    val seconds = argValue(args, "--seconds")?.toLong() ?: 10L
+    val secondsArg = argValue(args, "--seconds")
+    val seconds = if (secondsArg == null) 10L else secondsArg.toLongOrNull()?.takeIf { it > 0 } ?: run {
+        System.err.println("--seconds expects a positive whole number of seconds, got '$secondsArg'")
+        exitProcess(2)
+    }
     val record = argValue(args, "--record")?.let { Paths.get(it) }
 
     LibUsbDevices().use { devices ->
@@ -33,14 +39,15 @@ fun main(args: Array<String>) {
         }
         if (args.contains("--list")) return
 
-        val ref = refs.firstOrNull { DriverRegistry.find(it.info) != null }
-        if (ref == null) {
+        val match = refs.firstNotNullOfOrNull { r -> DriverRegistry.find(r.info)?.let { r to it } }
+        if (match == null) {
             val hint = if (WindowsDeviceCheck.isPresentWithoutDriver(I4seasonYuvDriver.SUPPORTED_IDS))
                 "The endoscope is plugged in but has no WinUSB driver. Follow docs/windows-setup.md (Zadig)."
             else "No supported device found. Plug in the endoscope and try again."
             System.err.println(hint)
             exitProcess(2)
         }
+        val (ref, matchedDriver) = match
 
         var packets = 0L
         val writer = record?.let { path ->
@@ -52,7 +59,7 @@ fun main(args: Array<String>) {
             writer?.onPacket(p, len, ts)
         }
 
-        val driver = DriverRegistry.find(ref.info)!!.withPacketSink(sink)
+        val driver = matchedDriver.withPacketSink(sink)
         println("Opening ${ref.info.idString} with ${driver.id} ...")
         val transport = try {
             devices.open(ref)
@@ -63,29 +70,36 @@ fun main(args: Array<String>) {
             }
             exitProcess(2)
         }
-        val source = driver.open(transport)
-        println("Streaming for $seconds s" + (record?.let { ", recording raw packets to $it" } ?: "") + ". Press the cable button a few times.")
-
         var frames = 0L
         var buttonFrames = 0L
-        runBlocking {
-            withTimeoutOrNull(seconds * 1000) {
-                var lastReport = System.nanoTime()
-                source.frames.collect { f ->
-                    frames++
-                    if (f.buttonPressed) buttonFrames++
-                    val now = System.nanoTime()
-                    if (now - lastReport >= 1_000_000_000L) {
-                        val st = source.stats.value
-                        val kind = when (val d = f.data) { is FrameData.Jpeg -> "jpeg ${d.bytes.size} B"; is FrameData.Yuyv422 -> "yuyv ${d.width}x${d.height}" }
-                        println("  %.1f fps  frames=%d partial=%d dropped=%d bytes=%d  %s".format(st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived, kind))
-                        lastReport = now
+        var source: FrameSource? = null
+        try {
+            source = driver.open(transport)
+            println("Streaming for $seconds s" + (record?.let { ", recording raw packets to $it" } ?: "") + ". Press the cable button a few times.")
+            val src = source
+            runBlocking {
+                withTimeoutOrNull(seconds * 1000) {
+                    var lastReport = System.nanoTime()
+                    src.frames.collect { f ->
+                        frames++
+                        if (f.buttonPressed) buttonFrames++
+                        val now = System.nanoTime()
+                        if (now - lastReport >= 1_000_000_000L) {
+                            val st = src.stats.value
+                            val kind = when (val d = f.data) { is FrameData.Jpeg -> "jpeg ${d.bytes.size} B"; is FrameData.Yuyv422 -> "yuyv ${d.width}x${d.height}" }
+                            println("  %.1f fps  frames=%d partial=%d dropped=%d bytes=%d  %s".format(Locale.ROOT, st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived, kind))
+                            lastReport = now
+                        }
                     }
                 }
             }
+        } catch (e: UsbException) {
+            // Unplug mid-stream (or a failed handshake) is expected here; no stack trace.
+            println("Device removed after $packets packets (${e.message})")
+        } finally {
+            if (source != null) source.close() else runCatching { transport.close() }
+            runCatching { writer?.close() }
         }
-        source.close()
-        writer?.close()
         println("Done. frames=$frames buttonFrames=$buttonFrames packets=$packets")
     }
 }

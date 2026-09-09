@@ -10,13 +10,14 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 
 /** Saves the sensor's original JPEG bytes plus an EXIF orientation tag for the chosen view transform. */
 object SnapshotWriter {
-    private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+    private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
 
     fun write(jpeg: ByteArray, rotationDegrees: Int, mirror: Boolean, dir: Path, now: LocalDateTime = LocalDateTime.now()): Path {
         Files.createDirectories(dir)

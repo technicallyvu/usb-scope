@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.core.driver.StreamStats
 import java.awt.image.BufferedImage
 import java.nio.file.Path
+import java.util.Locale
 import javax.swing.JFileChooser
 
 @Composable
@@ -78,7 +79,7 @@ private fun WaitingMessage(c: ConnectionState) {
 @Composable
 private fun DebugOverlay(st: StreamStats, modifier: Modifier) {
     Text(
-        "%.1f fps   frames %d   partial %d   dropped %d   %.1f MB".format(st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived / 1e6),
+        "%.1f fps   frames %d   partial %d   dropped %d   %.1f MB".format(Locale.ROOT, st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived / 1e6),
         color = Color(0xFF00FF66),
         style = MaterialTheme.typography.bodySmall,
         modifier = modifier.background(Color(0x99000000)).padding(6.dp),
