@@ -11,6 +11,7 @@ import com.technicallyvu.scope.core.usb.UsbTransport
 import com.technicallyvu.scope.desktop.media.ImageTransforms
 import com.technicallyvu.scope.desktop.media.Mp4Recorder
 import com.technicallyvu.scope.desktop.media.SnapshotWriter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,6 +71,7 @@ class ScopeViewModel(
     @Volatile private var lastJpeg: ByteArray? = null
     @Volatile private var lastImage: BufferedImage? = null
     @Volatile private var recorder: Mp4Recorder? = null
+    private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
 
@@ -107,10 +109,12 @@ class ScopeViewModel(
     }
 
     fun toggleRecording() {
-        val active = synchronized(recorderLock) { recorder }
-        if (active != null) {
-            stopRecording()
-            return
+        val generation = synchronized(recorderLock) {
+            if (recorder != null) {          // lost a race with another start; keep the existing one
+                stopRecordingLocked()
+                return
+            }
+            recorderGeneration
         }
         val img = lastImage ?: return
         val s = _state.value
@@ -128,8 +132,8 @@ class ScopeViewModel(
             return
         }
         synchronized(recorderLock) {
-            if (recorder != null) {          // lost a race with another start; keep the existing one
-                runCatching { created.close() }
+            if (recorder != null || recorderGeneration != generation) {
+                runCatching { created.close() }   // a concurrent start or stop won; discard ours
                 return
             }
             recorder = created
@@ -167,6 +171,8 @@ class ScopeViewModel(
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             val src = source
             src.frames.collect { frame -> onFrame(frame, src.stats.value) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: UsbException) {
             val wasStreaming = _state.value.connection is ConnectionState.Streaming
             _state.update {
@@ -219,6 +225,7 @@ class ScopeViewModel(
     private fun stopRecordingLocked() {
         recorder?.let { runCatching { it.close() } }
         recorder = null
+        recorderGeneration++
         _state.update { it.copy(recording = false) }
     }
 

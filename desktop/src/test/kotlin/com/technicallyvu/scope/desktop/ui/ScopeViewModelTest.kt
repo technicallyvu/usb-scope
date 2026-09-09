@@ -24,6 +24,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class ScopeViewModelTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -152,5 +154,37 @@ class ScopeViewModelTest {
         val names = Files.list(dir).use { it.toList() }.map { it.fileName.toString() }
         assertTrue(names.none { it.endsWith(".mp4") }, "unexpected mp4 in $names")
         vm.stop()
+    }
+
+    @Test
+    fun `stop does not leave a Failed state`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }
+        val vm = vm(devices, dir)
+        vm.start()
+        withTimeout(5_000) { vm.state.first { it.image != null } }
+        vm.stop()
+        Thread.sleep(500)
+        assertTrue(vm.state.value.connection !is ConnectionState.Failed)
+    }
+
+    @Test
+    fun `a stop during encoder start-up discards the new recorder`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }
+        val release = CountDownLatch(1)
+        val vm = vm(devices, dir, recorderFactory = { f, w, h ->
+            release.await(5, TimeUnit.SECONDS)
+            Mp4Recorder(f, w, h)
+        })
+        vm.start()
+        withTimeout(5_000) { vm.state.first { it.image != null } }
+        val starter = Thread { vm.toggleRecording() }
+        starter.start()
+        Thread.sleep(200)
+        vm.stop()
+        release.countDown()
+        starter.join()
+        assertTrue(!vm.state.value.recording)
     }
 }
