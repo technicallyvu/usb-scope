@@ -68,15 +68,18 @@ tasks.withType<Test>().configureEach {
 androidComponents {
     onVariants { variant ->
         val cap = variant.name.replaceFirstChar { it.uppercase() }
+        val variantName = variant.name
         val check = tasks.register("checkNoInternetPermission$cap") {
             val manifest = variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
             inputs.file(manifest)
+            outputs.upToDateWhen { false }
             doLast {
                 val text = manifest.get().asFile.readText()
-                check(!text.contains("android.permission.INTERNET")) { "INTERNET permission found in the merged ${variant.name} manifest" }
-                println("OK: no INTERNET permission in the ${variant.name} manifest")
+                check(!text.contains("android.permission.INTERNET")) { "INTERNET permission found in the merged $variantName manifest" }
+                println("OK: no INTERNET permission in the $variantName manifest")
             }
         }
-        tasks.matching { it.name == "assemble$cap" }.configureEach { dependsOn(check) }
+        tasks.matching { it.name == "assemble$cap" || it.name == "bundle$cap" }.configureEach { dependsOn(check) }
+        tasks.named("check") { dependsOn(check) }
     }
 }

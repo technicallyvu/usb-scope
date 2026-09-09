@@ -6,7 +6,7 @@
 
 **Architecture:** The session loop that the desktop view model carries (poll → open → stream → reconnect, rotation/mirror, button debounce) moves into `core` as a platform-free `ScopeSession`, so Android only supplies a USB transport over `UsbDeviceConnection`, a bitmap converter, MediaStore output, a `MediaRecorder`-backed clip recorder, and a Compose screen. The desktop shell is left untouched in this phase (it can adopt `ScopeSession` later). Android's single `-1` return for both timeout and error is bridged by a detach flag plus a consecutive-timeout limit in the transport.
 
-**Tech Stack:** Android Gradle Plugin 9.4.0 (built-in Kotlin; Gradle 9.7.1 and JDK 17 already in place), Kotlin 2.4.10, Compose BOM 2026.08.00 (ui/foundation 1.12.0, material3 1.4.0, window-size-class 1.4.0), activity-compose 1.13.0, lifecycle-viewmodel-compose 2.11.0, core-ktx 1.19.0, exifinterface 1.4.2, kotlinx-coroutines-android 1.11.0. compileSdk/targetSdk 36, minSdk 29. All checked against OSV on 2026-09-09: zero known vulnerabilities.
+**Tech Stack:** Android Gradle Plugin 9.4.0 (built-in Kotlin; Gradle 9.7.1 and JDK 17 already in place), Kotlin 2.4.10, Compose BOM 2026.08.00 (ui/foundation 1.12.0, material3 1.4.0, window-size-class 1.4.0), activity-compose 1.13.0, lifecycle-viewmodel-compose 2.11.0, core-ktx 1.19.0, exifinterface 1.4.2, kotlinx-coroutines-android 1.11.0. compileSdk 37 (forced by the pinned AndroidX AARs), targetSdk 36, minSdk 29. All checked against OSV on 2026-09-09: zero known vulnerabilities.
 
 ## Global Constraints
 
