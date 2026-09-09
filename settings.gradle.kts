@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "usb-endoscope-app"
-include(":core")
+include(":core", ":desktop")
