@@ -9,7 +9,8 @@ object WindowsDeviceCheck {
     private const val CACHE_MILLIS = 20_000L
 
     @Volatile private var cachedResult = false
-    @Volatile private var cachedAtMillis = Long.MIN_VALUE
+    /** Null means "no cache yet"; otherwise the wall-clock millis [cachedResult] was computed at. */
+    @Volatile private var cachedAtMillis: Long? = null
 
     fun isWindows(): Boolean = System.getProperty("os.name", "").startsWith("Windows")
 
@@ -20,16 +21,21 @@ object WindowsDeviceCheck {
     fun isPresentWithoutDriver(ids: Set<Pair<Int, Int>>): Boolean {
         if (!isWindows()) return false
         val now = System.currentTimeMillis()
-        val since = now - cachedAtMillis
-        if (since in 0 until CACHE_MILLIS) return cachedResult
+        val cachedAt = cachedAtMillis
+        if (cachedAt != null && now - cachedAt in 0 until CACHE_MILLIS) return cachedResult
         val result = query(ids)
         cachedResult = result
         cachedAtMillis = now
         return result
     }
 
-    /** Runs pnputil with a bounded wait, reading stdout on a helper thread so the pipe cannot block us. */
+    /**
+     * Runs pnputil with a bounded wait, reading stdout on a helper thread so the pipe cannot block us.
+     * The process wait and the reader join share one [PROCESS_TIMEOUT_SECONDS] deadline, so the total
+     * time this can block is bounded at [PROCESS_TIMEOUT_SECONDS], not double it.
+     */
     private fun query(ids: Set<Pair<Int, Int>>): Boolean = try {
+        val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(PROCESS_TIMEOUT_SECONDS)
         val proc = ProcessBuilder("pnputil", "/enum-devices", "/connected", "/problem")
             .redirectErrorStream(true)
             .start()
@@ -38,8 +44,10 @@ object WindowsDeviceCheck {
             "pnputil-reader")
         reader.isDaemon = true
         reader.start()
-        if (!proc.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) proc.destroyForcibly()
-        reader.join(TimeUnit.SECONDS.toMillis(PROCESS_TIMEOUT_SECONDS))
+        val procWaitMs = maxOf(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()))
+        if (!proc.waitFor(procWaitMs, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
+        val readerJoinMs = maxOf(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()))
+        reader.join(readerJoinMs)
         parse(output, ids)
     } catch (e: Exception) {
         false

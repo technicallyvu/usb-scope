@@ -131,7 +131,10 @@ class I4seasonFrameSource(
         }
     }
 
-    /** Non-suspending. Blocks only for as long as an in-flight read needs to return (READ_TIMEOUT_MS). */
+    /**
+     * Non-suspending. Worst case blocks for READ_TIMEOUT_MS (an in-flight read returning) plus
+     * CMD_TIMEOUT_MS (the stop control transfer issued right after it).
+     */
     override fun close() {
         closed = true
         ioLock.withLock {

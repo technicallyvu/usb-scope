@@ -53,8 +53,9 @@ interface DeviceDriver {
      * Performs the device handshake. Throws [com.technicallyvu.scope.core.usb.UsbException] if the device
      * cannot be started.
      *
-     * Blocking: up to about 4.5 s (3 attempts with a 1.5 s wait between them), so it must never be called
-     * on a UI thread — on Android that means a coroutine on `Dispatchers.IO`, not the main looper.
+     * Blocking: up to about 4.5 s (three attempts, sleeping 1.5 s after each failed attempt, including
+     * the last), so it must never be called on a UI thread — on Android that means a coroutine on
+     * `Dispatchers.IO`, not the main looper.
      */
     fun open(transport: UsbTransport): FrameSource
     /** A copy of this driver that also feeds raw packets to [sink] (fixture capture). */

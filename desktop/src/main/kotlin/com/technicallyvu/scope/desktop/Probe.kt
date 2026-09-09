@@ -34,8 +34,8 @@ fun main(args: Array<String>) {
         println("USB devices visible to libusb (${refs.size}):")
         for (r in refs) {
             val driver = DriverRegistry.find(r.info)
-            val ifaces = r.info.interfaces.joinToString(" ") { "if%d:%02X/%02X/%02X".format(it.number, it.usbClass, it.subclass, it.protocol) }
-            println("  %s  bus %d addr %d  class 0x%02X  %s  %s".format(r.info.idString, r.bus, r.address, r.info.usbClass, ifaces, driver?.let { "<- ${it.id}" } ?: ""))
+            val ifaces = r.info.interfaces.joinToString(" ") { "if%d:%02X/%02X/%02X".format(Locale.ROOT, it.number, it.usbClass, it.subclass, it.protocol) }
+            println("  %s  bus %d addr %d  class 0x%02X  %s  %s".format(Locale.ROOT, r.info.idString, r.bus, r.address, r.info.usbClass, ifaces, driver?.let { "<- ${it.id}" } ?: ""))
         }
         if (args.contains("--list")) return
 
@@ -72,20 +72,25 @@ fun main(args: Array<String>) {
         }
         var frames = 0L
         var buttonFrames = 0L
-        var source: FrameSource? = null
+        val source: FrameSource = try {
+            driver.open(transport)
+        } catch (e: UsbException) {
+            System.err.println("Could not start ${driver.id}: ${e.message}")
+            runCatching { transport.close() }
+            runCatching { writer?.close() }
+            exitProcess(2)
+        }
+        println("Streaming for $seconds s" + (record?.let { ", recording raw packets to $it" } ?: "") + ". Press the cable button a few times.")
         try {
-            source = driver.open(transport)
-            println("Streaming for $seconds s" + (record?.let { ", recording raw packets to $it" } ?: "") + ". Press the cable button a few times.")
-            val src = source
             runBlocking {
                 withTimeoutOrNull(seconds * 1000) {
                     var lastReport = System.nanoTime()
-                    src.frames.collect { f ->
+                    source.frames.collect { f ->
                         frames++
                         if (f.buttonPressed) buttonFrames++
                         val now = System.nanoTime()
                         if (now - lastReport >= 1_000_000_000L) {
-                            val st = src.stats.value
+                            val st = source.stats.value
                             val kind = when (val d = f.data) { is FrameData.Jpeg -> "jpeg ${d.bytes.size} B"; is FrameData.Yuyv422 -> "yuyv ${d.width}x${d.height}" }
                             println("  %.1f fps  frames=%d partial=%d dropped=%d bytes=%d  %s".format(Locale.ROOT, st.fps, st.framesEmitted, st.framesPartial, st.framesDropped, st.bytesReceived, kind))
                             lastReport = now
@@ -97,7 +102,7 @@ fun main(args: Array<String>) {
             // Unplug mid-stream (or a failed handshake) is expected here; no stack trace.
             println("Device removed after $packets packets (${e.message})")
         } finally {
-            if (source != null) source.close() else runCatching { transport.close() }
+            source.close()
             runCatching { writer?.close() }
         }
         println("Done. frames=$frames buttonFrames=$buttonFrames packets=$packets")

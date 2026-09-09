@@ -71,7 +71,7 @@ class ScopeViewModel(
     val state: StateFlow<UiState> = _state
 
     private val recorderLock = Any()
-    private var job: Job? = null
+    @Volatile private var job: Job? = null
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: BufferedImage? = null
     @Volatile private var recorder: Mp4Recorder? = null
@@ -98,11 +98,11 @@ class ScopeViewModel(
 
     /** Cancels the session loop and waits (bounded) for it to finish, so USB handles can be closed safely. */
     fun stop(timeoutMillis: Long = 3_000) {
+        stopRecording()
         val j = job ?: return
         job = null
         j.cancel()
         runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } }
-        stopRecording()
     }
 
     fun snapshot() {

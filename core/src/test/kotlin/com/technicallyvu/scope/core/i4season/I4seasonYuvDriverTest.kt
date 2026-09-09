@@ -6,6 +6,7 @@ import com.technicallyvu.scope.core.fixture.ReplayTransport
 import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
+import com.technicallyvu.scope.core.usb.UsbTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 
 class I4seasonYuvDriverTest {
     private val slept = mutableListOf<Long>()
@@ -105,5 +108,49 @@ class I4seasonYuvDriverTest {
         val t = transport(2)
         runCatching { runBlocking { driver { _, _, _ -> n++ }.open(t).frames.toList() } }
         assertTrue(n > 0)
+    }
+
+    @Test
+    fun `close from another thread waits for the in-flight read and issues no further reads`() {
+        val stream = (1..5).fold(ByteArray(0)) { acc, i -> acc + I4seasonTestFrames.frame(4, 2, fill = i.toByte()) }
+        val replay = ReplayTransport(I4seasonTestFrames.chunked(stream, 100), loop = true, videoEndpoint = I4seasonYuvDriver.EP_IN).apply {
+            controlResponses[0xA0 to 0x00] = I4seasonTestFrames.info(4, 2)
+        }
+        val readStarts = CopyOnWriteArrayList<Long>()
+        val transport = object : UsbTransport by replay {
+            override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
+                readStarts += System.nanoTime()
+                Thread.sleep(300)
+                return replay.bulkRead(endpoint, buffer, timeoutMs)
+            }
+        }
+
+        val source = driver().open(transport)
+        val collector = Thread({
+            runCatching { runBlocking { source.frames.collect { } } }
+        }, "frame-collector")
+        collector.start()
+
+        // Wait until a read is in flight.
+        val waitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (readStarts.isEmpty() && System.nanoTime() < waitDeadline) Thread.sleep(10)
+        assertTrue(readStarts.isNotEmpty(), "expected at least one bulkRead to have started")
+
+        val closeStart = System.nanoTime()
+        source.close()
+        val closeDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStart)
+
+        // (a) close() blocked until the in-flight 300 ms read returned, not less, and comfortably not forever.
+        assertTrue(closeDurationMs >= 100, "close() returned too quickly (${closeDurationMs}ms), in-flight read may not have been awaited")
+        assertTrue(closeDurationMs < 2000, "close() took too long (${closeDurationMs}ms)")
+
+        // (b) no further reads are issued once close() has returned.
+        val readCountAtClose = readStarts.size
+        Thread.sleep(400)
+        assertEquals(readCountAtClose, readStarts.size, "bulkRead was called again after close() returned")
+
+        // (c) the collector thread actually exits.
+        collector.join(3_000)
+        assertFalse(collector.isAlive, "collector thread did not finish after close()")
     }
 }

@@ -45,8 +45,10 @@ fun main(args: Array<String>) {
     // Shutdown order matters: the session loop must be cancelled AND joined (vm.stop()) and the app must
     // have exited before LibUsb.exit() runs, or libusb frees its context under an in-flight bulk transfer
     // and the JVM aborts. Hence devices.close() lives here, after application {} returns, not in onDispose.
+    // That return only happens because exitProcessOnExit is false below: application()'s default (true)
+    // calls System.exit(0) once the window closes, which would terminate the JVM before this finally runs.
     try {
-        application {
+        application(exitProcessOnExit = false) {
             val scope = rememberCoroutineScope()
             val vm = remember {
                 ScopeViewModel(
