@@ -1,0 +1,67 @@
+package com.technicallyvu.scope.media
+
+import android.content.ContentResolver
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+
+/** Writes photos to Pictures/<folder> and clips to Movies/<folder> through MediaStore (no storage permission needed on API 29+). */
+class MediaStoreSaver(private val resolver: ContentResolver, private val folder: String = "USB Scope") {
+
+    fun saveJpeg(bytes: ByteArray, exifOrientation: Int?, displayName: String): Uri {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$folder")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: throw IOException("MediaStore insert failed")
+        try {
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw IOException("cannot open $uri")
+            if (exifOrientation != null) {
+                resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                    ExifInterface(pfd.fileDescriptor).apply {
+                        setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                        saveAttributes()
+                    }
+                }
+            }
+            resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            return uri
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    fun saveBitmapJpeg(bitmap: Bitmap, displayName: String, quality: Int = 92): Uri {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        return saveJpeg(out.toByteArray(), null, displayName)
+    }
+
+    class PendingVideo(val uri: Uri, val fd: ParcelFileDescriptor)
+
+    fun createVideo(displayName: String): PendingVideo {
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/$folder")
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: throw IOException("MediaStore insert failed")
+        val fd = resolver.openFileDescriptor(uri, "rw") ?: run { resolver.delete(uri, null, null); throw IOException("cannot open $uri") }
+        return PendingVideo(uri, fd)
+    }
+
+    fun finishVideo(video: PendingVideo, keep: Boolean) {
+        runCatching { video.fd.close() }
+        if (keep) resolver.update(video.uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+        else resolver.delete(video.uri, null, null)
+    }
+}
