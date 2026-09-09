@@ -10,7 +10,7 @@ import java.nio.IntBuffer
 
 /** libusb-backed transport. Requires WinUSB bound to the device on Windows (docs/windows-setup.md). */
 class LibUsbTransport(private val handle: DeviceHandle) : UsbTransport {
-    private val readBuffer = ByteBuffer.allocateDirect(64 * 1024)
+    private var readBuffer: ByteBuffer = ByteBuffer.allocateDirect(0)
     private val transferred: IntBuffer = BufferUtils.allocateIntBuffer()
 
     override fun claimInterface(iface: Int) = check(LibUsb.claimInterface(handle, iface), "claimInterface $iface")
@@ -28,15 +28,14 @@ class LibUsbTransport(private val handle: DeviceHandle) : UsbTransport {
     }
 
     override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
-        require(buffer.size <= readBuffer.capacity()) { "read larger than ${readBuffer.capacity()} bytes" }
+        if (readBuffer.capacity() != buffer.size) readBuffer = ByteBuffer.allocateDirect(buffer.size)
         readBuffer.clear()
-        readBuffer.limit(buffer.size)
         transferred.clear()
         val r = LibUsb.bulkTransfer(handle, endpoint.toByte(), readBuffer, transferred, timeoutMs.toLong())
         if (r != LibUsb.SUCCESS && r != LibUsb.ERROR_TIMEOUT) {
             throw UsbException("bulkRead %02X failed: %s".format(endpoint, LibUsb.strError(r)), r)
         }
-        val n = transferred.get(0)
+        val n = minOf(transferred.get(0), buffer.size)
         if (n > 0) {
             readBuffer.rewind()
             readBuffer.get(buffer, 0, n)

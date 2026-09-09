@@ -49,17 +49,20 @@ object SnapshotWriter {
 
     private fun encodeJpeg(img: BufferedImage, quality: Float = 0.92f): ByteArray {
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
-        val params = writer.defaultWriteParam.apply {
-            compressionMode = ImageWriteParam.MODE_EXPLICIT
-            compressionQuality = quality
+        try {
+            val params = writer.defaultWriteParam.apply {
+                compressionMode = ImageWriteParam.MODE_EXPLICIT
+                compressionQuality = quality
+            }
+            val out = ByteArrayOutputStream()
+            ImageIO.createImageOutputStream(out).use { ios ->
+                writer.output = ios
+                writer.write(null, IIOImage(img, null, null), params)
+            }
+            return out.toByteArray()
+        } finally {
+            writer.dispose()
         }
-        val out = ByteArrayOutputStream()
-        ImageIO.createImageOutputStream(out).use { ios ->
-            writer.output = ios
-            writer.write(null, IIOImage(img, null, null), params)
-        }
-        writer.dispose()
-        return out.toByteArray()
     }
 
     internal fun uniquePath(dir: Path, base: String, ext: String): Path {

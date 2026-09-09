@@ -75,6 +75,8 @@ class ScopeViewModel(
     private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
+    /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
+    private var lastDriverId: String? = null
 
     fun start() {
         if (job != null) return
@@ -164,13 +166,14 @@ class ScopeViewModel(
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
-        _state.update { it.copy(rotation = driver.defaultRotation) }
+        if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
+            lastDriverId = driver.id
             val src = source
             src.frames.collect { frame -> onFrame(frame, src.stats.value) }
         } catch (e: CancellationException) {

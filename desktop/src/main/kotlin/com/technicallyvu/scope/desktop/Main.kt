@@ -21,6 +21,7 @@ import com.technicallyvu.scope.desktop.usb.LibUsbDevices
 import com.technicallyvu.scope.desktop.usb.WindowsDeviceCheck
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlin.system.exitProcess
 
 /**
  * USB Scope dev bench.
@@ -30,10 +31,14 @@ import java.nio.file.Paths
 fun main(args: Array<String>) {
     val replay = args.indexOf("--replay").takeIf { it >= 0 && it + 1 < args.size }?.let { Paths.get(args[it + 1]) }
     val layout = args.indexOf("--layout").takeIf { it >= 0 && it + 1 < args.size }?.let { args[it + 1] } ?: "yuv"
-    val replayInfo = if (layout == "jpeg")
-        UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 0), UsbInterfaceInfo(1, 0xFF, 0xF0, 1)))
-    else UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
-    val videoEndpoint = if (layout == "jpeg") UseeplusDriver.EP_VIDEO_IN else I4seasonYuvDriver.EP_IN
+    val (replayInfo, videoEndpoint) = when (layout) {
+        "yuv" -> UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1))) to I4seasonYuvDriver.EP_IN
+        "jpeg" -> UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 0), UsbInterfaceInfo(1, 0xFF, 0xF0, 1))) to UseeplusDriver.EP_VIDEO_IN
+        else -> {
+            System.err.println("Unknown --layout '$layout' (expected yuv or jpeg)")
+            exitProcess(2)
+        }
+    }
     val devices: DeviceSource = replay?.let { ReplayDeviceSource(it, replayInfo, videoEndpoint) } ?: LibUsbDevices()
 
     application {

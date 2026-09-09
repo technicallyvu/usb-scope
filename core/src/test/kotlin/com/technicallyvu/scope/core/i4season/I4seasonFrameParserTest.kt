@@ -51,9 +51,37 @@ class I4seasonFrameParserTest {
     @Test
     fun `a magic split across two reads is still found`() {
         val p = I4seasonFrameParser(w, h)
-        val stream = ByteArray(7) { 0x01 } + I4seasonTestFrames.frame(w, h, fill = 0x44)
-        val frames = feed(p, stream, 8)   // first read ends with DD, second starts with CC
+        val stream = ByteArray(6) { 0x01 } + I4seasonTestFrames.frame(w, h, fill = 0x44)
+        val frames = feed(p, stream, 8)   // first read ends with DD CC, second starts with 01 00
         assertEquals(1, frames.size)
+    }
+
+    @Test
+    fun `a false magic inside a desynchronised stream does not produce a frame`() {
+        val p = I4seasonFrameParser(w, h)
+        val garbage = ByteArray(200) { 0x00 }
+        // A candidate "frame" that starts with a real magic but whose trailer is not followed by
+        // a real magic: the parser must not lock onto it.
+        val falseHeader = byteArrayOf(0xDD.toByte(), 0xCC.toByte(), 0x01, 0x00) + ByteArray(507) { 0xAA.toByte() }
+        val falsePayload = ByteArray(16) { 0xBB.toByte() }
+        val filler = ByteArray(8) { 0x00 }   // ensures the bytes right after the false frame are not the magic
+        val real = I4seasonTestFrames.frame(w, h, fill = 0x33)
+        val stream = garbage + falseHeader + falsePayload + filler + real
+        val frames = feed(p, stream, 64)
+        assertEquals(1, frames.size)
+        assertArrayEquals(ByteArray(16) { 0x33 }, (frames[0].data as FrameData.Yuyv422).bytes)
+        assertTrue(p.framesDropped >= 1)
+    }
+
+    @Test
+    fun `a header with a different type byte is not treated as a frame start`() {
+        val p = I4seasonFrameParser(w, h)
+        val corrupted = I4seasonTestFrames.frame(w, h, fill = 0x77)
+        corrupted[2] = 0x02.toByte()   // byte 2 of the header no longer matches the magic's type byte
+        val real = I4seasonTestFrames.frame(w, h, fill = 0x88.toByte())
+        val frames = feed(p, corrupted + real, 64)
+        assertEquals(1, frames.size)
+        assertArrayEquals(ByteArray(16) { 0x88.toByte() }, (frames[0].data as FrameData.Yuyv422).bytes)
     }
 
     @Test
