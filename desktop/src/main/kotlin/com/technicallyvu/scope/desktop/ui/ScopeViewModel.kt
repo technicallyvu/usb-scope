@@ -172,7 +172,12 @@ class ScopeViewModel(
         val s = _state.value
         Files.createDirectories(s.outputDir)
         val file = s.outputDir.resolve("SCOPE_" + LocalDateTime.now().format(FILE_STAMP) + ".mp4")
-        recorder = recorderFactory(file, img.width, img.height)
+        recorder = try {
+            recorderFactory(file, img.width, img.height)
+        } catch (e: Exception) {
+            System.err.println("Recording could not start: ${e.message}")
+            return
+        }
         _state.update { it.copy(recording = true, lastSaved = file.fileName.toString()) }
     }
 

@@ -11,6 +11,7 @@ import java.nio.file.Path
  * Encodes frames to an MP4 file. Uses the MPEG-4 Part 2 encoder, which is always present in the
  * LGPL ffmpeg build and plays in Windows Media Player, VLC and browsers. Frame timing follows the
  * capture timestamps (variable frame rate).
+ * Not thread-safe: callers serialize [record] and [close] (the view model holds a lock).
  */
 class Mp4Recorder(file: Path, width: Int, height: Int, nominalFps: Double = 15.0) : AutoCloseable {
     private val recorder = FFmpegFrameRecorder(file.toFile(), width, height).apply {
@@ -27,7 +28,13 @@ class Mp4Recorder(file: Path, width: Int, height: Int, nominalFps: Double = 15.0
         private set
 
     init {
-        recorder.start()
+        try {
+            recorder.start()
+        } catch (e: Exception) {
+            runCatching { recorder.release() }
+            runCatching { converter.close() }
+            throw e
+        }
     }
 
     fun record(image: BufferedImage, timestampNanos: Long) {
@@ -42,8 +49,11 @@ class Mp4Recorder(file: Path, width: Int, height: Int, nominalFps: Double = 15.0
         try {
             recorder.stop()
         } finally {
-            recorder.release()
-            converter.close()
+            try {
+                recorder.release()
+            } finally {
+                converter.close()
+            }
         }
     }
 }
