@@ -13,6 +13,8 @@ class ReplayTransport(
     private val packets: List<LoggedPacket>,
     private val loop: Boolean = false,
     private val sleep: (millis: Long) -> Unit = {},
+    /** The bulk-IN endpoint [packets] were captured from; reads on any other endpoint report "nothing pending" (0). */
+    private val videoEndpoint: Int = UseeplusDriver.EP_VIDEO_IN,
 ) : UsbTransport {
     val calls = mutableListOf<String>()
 
@@ -45,7 +47,7 @@ class ReplayTransport(
     }
 
     override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
-        if (endpoint != UseeplusDriver.EP_VIDEO_IN) return 0
+        if (endpoint != videoEndpoint) return 0
         if (index >= packets.size) {
             if (!loop || packets.isEmpty()) throw UsbException("replay ended")
             index = 0
