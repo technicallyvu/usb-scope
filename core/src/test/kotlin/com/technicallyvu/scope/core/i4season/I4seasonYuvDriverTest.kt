@@ -40,7 +40,7 @@ class I4seasonYuvDriverTest {
         assertFalse(d.matches(UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(iap, UsbInterfaceInfo(1, 0xFF, 0xF0, 1)))))
         assertFalse(d.matches(UsbDeviceInfo(0x2CE3, 0x3828, 0xEF)))              // layout unknown -> not ours
         assertFalse(d.matches(UsbDeviceInfo(0x1234, 0x0001, 0xEF, listOf(yuv))))
-        assertEquals(0, d.defaultRotation)
+        assertEquals(180, d.defaultRotation)
     }
 
     @Test

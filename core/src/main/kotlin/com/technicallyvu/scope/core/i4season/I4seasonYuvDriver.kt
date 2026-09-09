@@ -31,7 +31,8 @@ class I4seasonYuvDriver(
 
     override val id = "i4season-yuv"
     override val displayName = "i4season YUV endoscope"
-    override val defaultRotation: Int get() = 0
+    /** Anthony's unit shows upright at 180 (acceptance 2026-09-09). */
+    override val defaultRotation: Int get() = 180
 
     override fun matches(info: UsbDeviceInfo): Boolean {
         if ((info.vendorId to info.productId) !in SUPPORTED_IDS) return false
