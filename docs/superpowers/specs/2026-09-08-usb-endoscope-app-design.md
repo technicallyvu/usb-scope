@@ -212,3 +212,30 @@ overlay. Cable button = debounced rising edge on `buttonPressed` → same snapsh
 - F-Droid metadata submission.
 - Windows Store track: Hardware Dev Center account, EV code-signing certificate (~$300/yr),
   attestation-signed WinUSB INF for both USB IDs published to Windows Update; MSIX via jpackage.
+
+## 12. Amendment 2026-09-08: Anthony's unit is a second protocol personality
+
+**Finding.** The same USB ID `2CE3:3828` ships with two firmware personalities. The open-source
+projects document the two-interface **JPEG** variant (§2, §5.1). Anthony's unit (i4season
+"su4p-002", firmware 5.0.13, bcdDevice 1.11) exposes **one** interface (class `FF`, subclass `F0`,
+protocol `01`, bulk OUT `0x02`, bulk IN `0x82`) and streams **raw YUV**. Verified on the device and
+against the vendor app's decompiled code, which classifies devices exactly this way
+(`OTG_CAMERA_CTYPE_JPEG` = two interfaces, `OTG_CAMERA_CTYPE_YUV` = lone protocol-1 interface,
+otherwise UVC). On Linux the unit reports the same single interface; nothing is Windows-specific.
+
+**Protocol, "i4season YUV" type (all requests on endpoint 0, class type, device recipient):**
+
+| Step | Request | Notes |
+|---|---|---|
+| Info | `bmRequestType 0xA0, bRequest 0, wValue 5, wIndex 0, wLength 512` | Returns 480 bytes: `[0]=01`, `[1..16]` vendor `i4season`, `[17..32]` product, `[33..40]` firmware, `[46..47]` width LE, `[48..49]` height LE (320×240). Any other wValue STALLs. |
+| Start | `bmRequestType 0x20, bRequest 1, wValue 5, wIndex 0`, 64 zero bytes | Streaming begins on bulk IN `0x82` |
+| Stop | `bmRequestType 0x20, bRequest 2, wValue 5, wIndex 0`, no data | |
+
+Stream: repeating `[511-byte header][width×height×2 bytes YUYV 4:2:2]`. Header = `DD CC 01 00 58 02 00 <flags> 00` + 502 constant bytes; `flags` (byte 7) is `0x02` on the frame where the cable button was pressed, else `0`. Byte order is Y0 U Y1 V. ~11 fps. The bulk OUT endpoint is unused. The vendor app upscales these frames to 1920×1440 when saving photos; we save native resolution.
+
+**Design changes.**
+- `Frame` carries `FrameData`, a sealed type: `Jpeg(bytes)` or `Yuyv422(width, height, bytes)`. Shells decode either; snapshots of YUV frames are JPEG-encoded at save time, then EXIF-tagged as before.
+- `UsbTransport` gains `controlTransfer(requestType, request, value, index, data, timeoutMs)`.
+- `UsbDeviceInfo` gains the active configuration's interface list (`UsbInterfaceInfo(number, class, subclass, protocol)`), so drivers match on layout, not just IDs: `I4seasonYuvDriver` claims a lone `FF/F0/01` interface; `UseeplusDriver` claims the `FF/F0/00` + `FF/F0/01` pair.
+- `DeviceDriver` gains `defaultRotation` (useeplus 90, i4season 0) and `withPacketSink(sink)`.
+- Phase 1 acceptance runs against the i4season driver. The useeplus driver stays, untested on hardware, for the other variant.
