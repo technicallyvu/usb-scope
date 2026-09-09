@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.core.driver.StreamStats
+import java.awt.image.BufferedImage
 import java.nio.file.Path
 import javax.swing.JFileChooser
 
@@ -36,7 +37,7 @@ fun ScopeScreen(vm: ScopeViewModel) {
         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
             val img = s.image
             if (img != null) {
-                val bitmap = remember(img) { img.toComposeImageBitmap() }
+                val bitmap = remember(img) { img.toArgb().toComposeImageBitmap() }
                 Image(bitmap = bitmap, contentDescription = "Live view", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             } else {
                 WaitingMessage(s.connection)
@@ -114,4 +115,20 @@ private fun chooseFolder(current: Path): Path? {
         dialogTitle = "Choose where to save photos and clips"
     }
     return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.toPath() else null
+}
+
+/**
+ * Compose's BufferedImage conversion renders TYPE_3BYTE_BGR frames as a solid green block (observed
+ * on Compose 1.12); it is reliable for TYPE_INT_ARGB, so convert before handing frames to Skia.
+ */
+private fun BufferedImage.toArgb(): BufferedImage {
+    if (type == BufferedImage.TYPE_INT_ARGB) return this
+    val out = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+    val g = out.createGraphics()
+    try {
+        g.drawImage(this, 0, 0, null)
+    } finally {
+        g.dispose()
+    }
+    return out
 }
