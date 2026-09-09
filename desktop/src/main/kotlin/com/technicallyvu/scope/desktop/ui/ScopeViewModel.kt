@@ -22,11 +22,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 sealed interface ConnectionState {
     data class NoDevice(val needsDriverHint: Boolean) : ConnectionState
@@ -93,9 +96,12 @@ class ScopeViewModel(
         }
     }
 
-    fun stop() {
-        job?.cancel()
+    /** Cancels the session loop and waits (bounded) for it to finish, so USB handles can be closed safely. */
+    fun stop(timeoutMillis: Long = 3_000) {
+        val j = job ?: return
         job = null
+        j.cancel()
+        runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } }
         stopRecording()
     }
 
@@ -238,6 +244,6 @@ class ScopeViewModel(
 
     companion object {
         const val BUTTON_DEBOUNCE_NANOS = 300_000_000L
-        val FILE_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+        val FILE_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }

@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Driver for the Geek szitman "supercamera" family (useeplus protocol). Spec §5.1.
@@ -28,7 +30,7 @@ class UseeplusDriver(
 ) : DeviceDriver {
 
     override val id = "useeplus"
-    override val displayName = "useeplus endoscope"
+    override val displayName = "MJPEG endoscope (dual interface)"
     override val defaultRotation: Int get() = 90
 
     override fun matches(info: UsbDeviceInfo): Boolean {
@@ -49,8 +51,9 @@ class UseeplusDriver(
                 return UseeplusFrameSource(transport, clock, ioDispatcher, packetSink)
             } catch (e: UsbException) {
                 lastError = e
-                runCatching { transport.resetDevice() }
-                sleep(RESET_WAIT_MS)
+                // No device reset here: on libusb resetDevice() invalidates the handle we are about to
+                // retry with, and Android has no reset at all. A plain wait is portable and sufficient.
+                sleep(RETRY_WAIT_MS)
             }
         }
         throw UsbException("useeplus handshake failed after $OPEN_ATTEMPTS attempts", cause = lastError)
@@ -80,12 +83,13 @@ class UseeplusDriver(
         val MAGIC_INIT = byteArrayOf(0xFF.toByte(), 0x55, 0xFF.toByte(), 0x55, 0xEE.toByte(), 0x10)
         val CMD_CONNECT = byteArrayOf(0xBB.toByte(), 0xAA.toByte(), 0x05, 0x00, 0x00)
         const val PACKET_SIZE = 1024
-        const val READ_TIMEOUT_MS = 5000
+        /** Short on purpose: a timeout costs nothing (n == 0 -> continue) and lets the loop notice close/cancel. */
+        const val READ_TIMEOUT_MS = 500
         const val HEARTBEAT_DRAIN_MAX = 30
         const val HEARTBEAT_TIMEOUT_MS = 100
         const val CMD_TIMEOUT_MS = 1000
         const val OPEN_ATTEMPTS = 3
-        const val RESET_WAIT_MS = 1500L
+        const val RETRY_WAIT_MS = 1500L
         const val DISCARD_FRAMES = 2
     }
 }
@@ -101,6 +105,13 @@ class UseeplusFrameSource(
 
     @Volatile private var closed = false
 
+    /**
+     * Held around the native bulk read and around the release/close in [close], so that closing waits
+     * for an in-flight transfer to return before the interface and the transport go away. Without it a
+     * shutdown can free the USB context under a running libusb transfer and abort the JVM.
+     */
+    private val ioLock = ReentrantLock()
+
     // Note: the blocking bulkRead is offloaded per-call via withContext rather than wrapping the
     // whole flow in flowOn(dispatcher). flowOn interposes a buffered channel between producer and
     // collector, which lets this loop race ahead of a downstream take(n)'s cancellation and attempt
@@ -113,7 +124,10 @@ class UseeplusFrameSource(
         var discarded = 0
         while (!closed) {
             val n = withContext(dispatcher) {
-                transport.bulkRead(UseeplusDriver.EP_VIDEO_IN, buf, UseeplusDriver.READ_TIMEOUT_MS)
+                ioLock.withLock {
+                    if (closed) 0
+                    else transport.bulkRead(UseeplusDriver.EP_VIDEO_IN, buf, UseeplusDriver.READ_TIMEOUT_MS)
+                }
             }
             if (n == 0) continue
             val now = clock()
@@ -131,10 +145,13 @@ class UseeplusFrameSource(
         }
     }
 
+    /** Non-suspending. Blocks only for as long as an in-flight read needs to return (READ_TIMEOUT_MS). */
     override fun close() {
         closed = true
-        runCatching { transport.releaseInterface(UseeplusDriver.IFACE_VIDEO) }
-        runCatching { transport.releaseInterface(UseeplusDriver.IFACE_CONTROL) }
-        runCatching { transport.close() }
+        ioLock.withLock {
+            runCatching { transport.releaseInterface(UseeplusDriver.IFACE_VIDEO) }
+            runCatching { transport.releaseInterface(UseeplusDriver.IFACE_CONTROL) }
+            runCatching { transport.close() }
+        }
     }
 }

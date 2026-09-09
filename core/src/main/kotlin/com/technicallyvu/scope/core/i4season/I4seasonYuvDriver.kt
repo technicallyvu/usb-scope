@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Driver for the single-interface "YUV" personality of the 2CE3:3828 / 0329:2022 endoscopes
@@ -30,7 +32,7 @@ class I4seasonYuvDriver(
 ) : DeviceDriver {
 
     override val id = "i4season-yuv"
-    override val displayName = "i4season YUV endoscope"
+    override val displayName = "YUV endoscope (single interface)"
     /** Anthony's unit shows upright at 180 (acceptance 2026-09-09). */
     override val defaultRotation: Int get() = 180
 
@@ -50,8 +52,9 @@ class I4seasonYuvDriver(
                 return I4seasonFrameSource(transport, info, clock, ioDispatcher, packetSink)
             } catch (e: UsbException) {
                 lastError = e
-                runCatching { transport.resetDevice() }
-                sleep(RESET_WAIT_MS)
+                // No device reset here: on libusb resetDevice() invalidates the handle we are about to
+                // retry with, and Android has no reset at all. A plain wait is portable and sufficient.
+                sleep(RETRY_WAIT_MS)
             }
         }
         throw UsbException("i4season handshake failed after $OPEN_ATTEMPTS attempts", cause = lastError)
@@ -71,7 +74,8 @@ class I4seasonYuvDriver(
         const val INTERFACE = 0
         const val EP_IN = 0x82
         const val CHUNK_SIZE = 16384
-        const val READ_TIMEOUT_MS = 5000
+        /** Short on purpose: a timeout costs nothing (n == 0 -> continue) and lets the loop notice close/cancel. */
+        const val READ_TIMEOUT_MS = 500
         const val REQTYPE_IN = 0xA0
         const val REQTYPE_OUT = 0x20
         const val REQ_INFO = 0
@@ -82,7 +86,7 @@ class I4seasonYuvDriver(
         const val START_LENGTH = 64
         const val CMD_TIMEOUT_MS = 1000
         const val OPEN_ATTEMPTS = 3
-        const val RESET_WAIT_MS = 1500L
+        const val RETRY_WAIT_MS = 1500L
     }
 }
 
@@ -98,13 +102,25 @@ class I4seasonFrameSource(
 
     @Volatile private var closed = false
 
+    /**
+     * Held around the native bulk read and around the stop/release/close in [close], so that closing
+     * waits for an in-flight transfer to return before the interface and the transport go away.
+     * Without it a shutdown can free the USB context under a running libusb transfer and abort the JVM.
+     */
+    private val ioLock = ReentrantLock()
+
     override val frames: Flow<Frame> = flow {
         val parser = I4seasonFrameParser(info.width, info.height)
         val fps = FpsMeter()
         val buf = ByteArray(I4seasonYuvDriver.CHUNK_SIZE)
         while (!closed) {
             // Blocking USB read on the IO dispatcher; emit on the collector's context (no internal buffer).
-            val n = withContext(dispatcher) { transport.bulkRead(I4seasonYuvDriver.EP_IN, buf, I4seasonYuvDriver.READ_TIMEOUT_MS) }
+            val n = withContext(dispatcher) {
+                ioLock.withLock {
+                    if (closed) 0
+                    else transport.bulkRead(I4seasonYuvDriver.EP_IN, buf, I4seasonYuvDriver.READ_TIMEOUT_MS)
+                }
+            }
             if (n == 0) continue
             val now = clock()
             packetSink?.onPacket(buf, n, now)
@@ -115,10 +131,13 @@ class I4seasonFrameSource(
         }
     }
 
+    /** Non-suspending. Blocks only for as long as an in-flight read needs to return (READ_TIMEOUT_MS). */
     override fun close() {
         closed = true
-        runCatching { transport.controlTransfer(I4seasonYuvDriver.REQTYPE_OUT, I4seasonYuvDriver.REQ_STOP, I4seasonYuvDriver.WVALUE, 0, ByteArray(0), I4seasonYuvDriver.CMD_TIMEOUT_MS) }
-        runCatching { transport.releaseInterface(I4seasonYuvDriver.INTERFACE) }
-        runCatching { transport.close() }
+        ioLock.withLock {
+            runCatching { transport.controlTransfer(I4seasonYuvDriver.REQTYPE_OUT, I4seasonYuvDriver.REQ_STOP, I4seasonYuvDriver.WVALUE, 0, ByteArray(0), I4seasonYuvDriver.CMD_TIMEOUT_MS) }
+            runCatching { transport.releaseInterface(I4seasonYuvDriver.INTERFACE) }
+            runCatching { transport.close() }
+        }
     }
 }

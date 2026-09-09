@@ -2,6 +2,7 @@ package com.technicallyvu.scope.desktop
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.window.Window
@@ -41,30 +42,35 @@ fun main(args: Array<String>) {
     }
     val devices: DeviceSource = replay?.let { ReplayDeviceSource(it, replayInfo, videoEndpoint) } ?: LibUsbDevices()
 
-    application {
-        val scope = rememberCoroutineScope()
-        val vm = remember {
-            ScopeViewModel(
-                devices = devices,
-                drivers = DriverRegistry.all,
-                scope = scope,
-                outputDir = defaultOutputDir(),
-                driverHintCheck = { replay == null && WindowsDeviceCheck.isPresentWithoutDriver(I4seasonYuvDriver.SUPPORTED_IDS) },
-            ).also { it.start() }
-        }
-        DisposableEffect(Unit) {
-            onDispose {
-                vm.stop()
-                (devices as? AutoCloseable)?.close()
+    // Shutdown order matters: the session loop must be cancelled AND joined (vm.stop()) and the app must
+    // have exited before LibUsb.exit() runs, or libusb frees its context under an in-flight bulk transfer
+    // and the JVM aborts. Hence devices.close() lives here, after application {} returns, not in onDispose.
+    try {
+        application {
+            val scope = rememberCoroutineScope()
+            val vm = remember {
+                ScopeViewModel(
+                    devices = devices,
+                    drivers = DriverRegistry.all,
+                    scope = scope,
+                    outputDir = defaultOutputDir(),
+                    driverHintCheck = { replay == null && WindowsDeviceCheck.isPresentWithoutDriver(I4seasonYuvDriver.SUPPORTED_IDS) },
+                )
+            }
+            LaunchedEffect(Unit) { vm.start() }
+            DisposableEffect(Unit) {
+                onDispose { vm.stop() }
+            }
+            Window(
+                onCloseRequest = ::exitApplication,
+                title = "USB Scope (dev bench)" + (replay?.let { "  —  replay: ${it.fileName}" } ?: ""),
+                state = rememberWindowState(width = 900.dp, height = 760.dp),
+            ) {
+                MaterialTheme { ScopeScreen(vm) }
             }
         }
-        Window(
-            onCloseRequest = ::exitApplication,
-            title = "USB Scope (dev bench)" + (replay?.let { "  —  replay: ${it.fileName}" } ?: ""),
-            state = rememberWindowState(width = 900.dp, height = 760.dp),
-        ) {
-            MaterialTheme { ScopeScreen(vm) }
-        }
+    } finally {
+        (devices as? AutoCloseable)?.close()
     }
 }
 

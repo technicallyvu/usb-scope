@@ -67,18 +67,19 @@ class UseeplusDriverTest {
     }
 
     @Test
-    fun `open retries with a reset after a failure`() {
+    fun `open retries after a failure without resetting the device`() {
         val t = ReplayTransport(emptyList()).apply { failuresBeforeSuccess = 1 }
         driver().open(t)
-        assertEquals(1, t.resets)
-        assertEquals(listOf(UseeplusDriver.RESET_WAIT_MS), slept)
+        assertEquals(0, t.resets)
+        assertEquals(listOf(UseeplusDriver.RETRY_WAIT_MS), slept)
     }
 
     @Test
     fun `open gives up after three failures`() {
         val t = ReplayTransport(emptyList()).apply { failuresBeforeSuccess = 3 }
         assertThrows(UsbException::class.java) { driver().open(t) }
-        assertEquals(3, t.resets)
+        assertEquals(0, t.resets)
+        assertEquals(3, t.calls.count { it.startsWith("claim") })
     }
 
     @Test

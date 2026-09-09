@@ -36,6 +36,27 @@ class ScopeViewModelTest {
         override fun open(ref: DeviceRef): UsbTransport = opener()
     }
 
+    /**
+     * Wraps a [ReplayTransport] and makes every bulk read take [readMillis], standing in for a real
+     * libusb transfer that cancellation cannot preempt. ReplayTransport is final, hence delegation.
+     */
+    private class SlowTransport(private val inner: ReplayTransport, private val readMillis: Long = 200) : UsbTransport {
+        val calls: List<String> get() = inner.calls
+        override fun claimInterface(iface: Int) = inner.claimInterface(iface)
+        override fun releaseInterface(iface: Int) = inner.releaseInterface(iface)
+        override fun setAltSetting(iface: Int, alt: Int) = inner.setAltSetting(iface, alt)
+        override fun clearHalt(endpoint: Int) = inner.clearHalt(endpoint)
+        override fun bulkWrite(endpoint: Int, data: ByteArray, timeoutMs: Int) = inner.bulkWrite(endpoint, data, timeoutMs)
+        override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
+            Thread.sleep(readMillis)
+            return inner.bulkRead(endpoint, buffer, timeoutMs)
+        }
+        override fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, data: ByteArray, timeoutMs: Int) =
+            inner.controlTransfer(requestType, request, value, index, data, timeoutMs)
+        override fun resetDevice() = inner.resetDevice()
+        override fun close() = inner.close()
+    }
+
     private fun vm(
         devices: DeviceSource,
         dir: Path,
@@ -186,6 +207,24 @@ class ScopeViewModelTest {
         vm.stop()
         Thread.sleep(500)
         assertTrue(vm.state.value.connection !is ConnectionState.Failed)
+    }
+
+    @Test
+    fun `stop joins the session so the transport is closed before it returns`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val transport = SlowTransport(ReplayTransport(packets, loop = true))
+        val devices = FakeDevices(listOf(ref)) { transport }
+        val vm = vm(devices, dir)
+        vm.start()
+        withTimeout(10_000) { vm.state.first { it.image != null } }
+        val startNanos = System.nanoTime()
+        vm.stop()
+        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
+        assertTrue(
+            transport.calls.contains("close"),
+            "session finally had not run when stop() returned; calls=${transport.calls.takeLast(6)}",
+        )
+        assertTrue(elapsedMs < 3_000, "stop() took $elapsedMs ms")
     }
 
     @Test

@@ -78,10 +78,11 @@ class I4seasonYuvDriverTest {
     }
 
     @Test
-    fun `open retries with reset and gives up after three failures`() {
+    fun `open retries without a device reset and gives up after three failures`() {
         val t = transport(0).apply { failuresBeforeSuccess = 3 }
         assertThrows(UsbException::class.java) { driver().open(t) }
-        assertEquals(3, t.resets)
+        assertEquals(0, t.resets)
+        assertEquals(3, t.calls.count { it.startsWith("claim") })
         assertEquals(listOf(1500L, 1500L, 1500L), slept)
     }
 
