@@ -2,6 +2,7 @@ package com.technicallyvu.scope.desktop.usb
 
 import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbTransport
+import org.usb4java.BufferUtils
 import org.usb4java.DeviceHandle
 import org.usb4java.LibUsb
 import java.nio.ByteBuffer
@@ -10,7 +11,7 @@ import java.nio.IntBuffer
 /** libusb-backed transport. Requires WinUSB bound to the device on Windows (docs/windows-setup.md). */
 class LibUsbTransport(private val handle: DeviceHandle) : UsbTransport {
     private val readBuffer = ByteBuffer.allocateDirect(64 * 1024)
-    private val transferred = IntBuffer.allocate(1)
+    private val transferred: IntBuffer = BufferUtils.allocateIntBuffer()
 
     override fun claimInterface(iface: Int) = check(LibUsb.claimInterface(handle, iface), "claimInterface $iface")
     override fun releaseInterface(iface: Int) = check(LibUsb.releaseInterface(handle, iface), "releaseInterface $iface")

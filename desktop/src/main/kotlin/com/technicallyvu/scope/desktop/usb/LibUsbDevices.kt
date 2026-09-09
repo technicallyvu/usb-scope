@@ -13,8 +13,9 @@ import org.usb4java.DeviceList
 import org.usb4java.LibUsb
 
 /**
- * Enumerates devices via libusb. On Windows libusb only lists devices with WinUSB/libusbK bound,
- * so an unbound endoscope is simply absent here (see [WindowsDeviceCheck]).
+ * Enumerates devices via libusb. On Windows an endoscope without WinUSB bound is still listed
+ * (descriptors come from the hub), but [open] fails with LIBUSB_ERROR_NOT_SUPPORTED until the
+ * one-time driver step in docs/windows-setup.md is done; see [WindowsDeviceCheck].
  */
 class LibUsbDevices : DeviceSource, AutoCloseable {
     private val context = Context()
