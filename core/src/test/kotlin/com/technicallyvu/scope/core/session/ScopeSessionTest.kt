@@ -29,9 +29,32 @@ class ScopeSessionTest {
     private val yuvInfo = UsbDeviceInfo(0x2CE3, 0x3828, 0xEF, listOf(UsbInterfaceInfo(0, 0xFF, 0xF0, 1)))
     private val ref = DeviceRef(yuvInfo, 0, 1)
 
-    private class FakeDevices(var refs: List<DeviceRef>, val opener: () -> UsbTransport) : DeviceSource {
+    private class FakeDevices(var refs: List<DeviceRef>, var opener: () -> UsbTransport) : DeviceSource {
         override fun list() = refs
         override fun open(ref: DeviceRef) = opener()
+    }
+
+    /** [DeviceSource] whose [list] throws for the first [failures] calls, then returns [refs]. */
+    private class FlakyListDevices(
+        private val failures: Int,
+        private val refs: List<DeviceRef>,
+        private val opener: () -> UsbTransport,
+    ) : DeviceSource {
+        private val calls = AtomicInteger()
+        override fun list(): List<DeviceRef> {
+            if (calls.getAndIncrement() < failures) throw IllegalStateException("binder")
+            return refs
+        }
+        override fun open(ref: DeviceRef) = opener()
+    }
+
+    /** Delegates every call to [delegate] except [bulkRead], which throws once [endNow] is set. */
+    private class EndableTransport(private val delegate: UsbTransport) : UsbTransport by delegate {
+        @Volatile var endNow = false
+        override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
+            if (endNow) throw UsbException("ended")
+            return delegate.bulkRead(endpoint, buffer, timeoutMs)
+        }
     }
 
     private class CountingSink : FrameSink {
@@ -53,7 +76,7 @@ class ScopeSessionTest {
     @AfterEach fun tearDown() = scope.cancel()
 
     @Test
-    fun `no device reports NoDevice with the hint`() = runBlocking {
+    fun `no device reports NoDevice with the hint`(): Unit = runBlocking {
         val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink(), hint = { true })
         s.start()
         withTimeout(2_000) { s.state.first { (it.connection as? ConnectionState.NoDevice)?.needsDriverHint == true } }
@@ -61,7 +84,7 @@ class ScopeSessionTest {
     }
 
     @Test
-    fun `streams frames with the driver default rotation then returns to NoDevice`() = runBlocking {
+    fun `streams frames with the driver default rotation then returns to NoDevice`(): Unit = runBlocking {
         val sink = CountingSink()
         val devices = FakeDevices(listOf(ref)) { stream(6) }
         val s = session(devices, sink)
@@ -75,7 +98,7 @@ class ScopeSessionTest {
     }
 
     @Test
-    fun `button rising edge fires one snapshot`() = runBlocking {
+    fun `button rising edge fires one snapshot`(): Unit = runBlocking {
         val sink = CountingSink()
         val devices = FakeDevices(listOf(ref)) { stream(8, buttonOn = setOf(5, 6)) }
         val s = session(devices, sink)
@@ -88,15 +111,18 @@ class ScopeSessionTest {
     }
 
     @Test
-    fun `rotation and mirror are locked while recording and survive a reconnect`() = runBlocking {
+    fun `rotation and mirror are locked while recording and survive a reconnect`(): Unit = runBlocking {
         val sink = CountingSink()
-        val devices = FakeDevices(listOf(ref)) { stream(6) }   // ends by itself -> reconnect
+        val first = EndableTransport(stream(6, loop = true))   // never ends on its own
+        val devices = FakeDevices(listOf(ref)) { first }
         val s = session(devices, sink)
         s.start()
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         s.rotate(); s.toggleMirror()
         assertEquals(270, s.state.value.rotation); assertTrue(s.state.value.mirror)
         s.setRecording(true); s.rotate(); assertEquals(270, s.state.value.rotation); s.setRecording(false)
+        devices.opener = { stream(6, loop = true) }   // the reconnect gets a fresh looping stream
+        first.endNow = true                           // deliberately end the current one
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         assertEquals(270, s.state.value.rotation); assertTrue(s.state.value.mirror)
@@ -104,18 +130,28 @@ class ScopeSessionTest {
     }
 
     @Test
-    fun `open failure reports Failed and keeps retrying`() = runBlocking {
-        var attempts = 0
-        val devices = FakeDevices(listOf(ref)) { attempts++; throw UsbException("no permission") }
+    fun `open failure reports Failed and keeps retrying`(): Unit = runBlocking {
+        val attempts = AtomicInteger()
+        val devices = FakeDevices(listOf(ref)) { attempts.incrementAndGet(); throw UsbException("no permission") }
         val s = session(devices, CountingSink())
         s.start()
         withTimeout(2_000) { s.state.first { it.connection is ConnectionState.Failed } }
-        withTimeout(2_000) { while (attempts < 2) kotlinx.coroutines.delay(10) }
+        withTimeout(2_000) { while (attempts.get() < 2) kotlinx.coroutines.delay(10) }
         s.stop()
     }
 
     @Test
-    fun `stop joins the session so the transport is closed on return`() = runBlocking {
+    fun `list failure reports Failed and keeps polling`(): Unit = runBlocking {
+        val devices = FlakyListDevices(failures = 2, refs = listOf(ref)) { stream(6, loop = true) }
+        val s = session(devices, CountingSink())
+        s.start()
+        withTimeout(2_000) { s.state.first { it.connection is ConnectionState.Failed } }
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        s.stop()
+    }
+
+    @Test
+    fun `stop joins the session so the transport is closed on return`(): Unit = runBlocking {
         val t = stream(4, loop = true)
         val devices = FakeDevices(listOf(ref)) { t }
         val s = session(devices, CountingSink())
@@ -123,5 +159,15 @@ class ScopeSessionTest {
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         s.stop()
         assertTrue(t.calls.contains("close"), "transport not closed when stop() returned: ${t.calls}")
+    }
+
+    @Test
+    fun `stop returns true when the transport closed in time`(): Unit = runBlocking {
+        val t = stream(4, loop = true)
+        val devices = FakeDevices(listOf(ref)) { t }
+        val s = session(devices, CountingSink())
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertTrue(s.stop(), "expected stop() to report the join completed in time")
     }
 }

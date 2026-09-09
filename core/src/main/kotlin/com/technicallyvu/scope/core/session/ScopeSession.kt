@@ -38,7 +38,11 @@ data class SessionState(
     val lastSaved: String? = null,
 )
 
-/** Receives frames on the session's worker thread. Implementations must be fast and must not block. */
+/**
+ * Receives frames on the session's worker thread. Implementations must be fast and must not block.
+ * If a call throws, the session drops that frame (or button event) and continues; it does not end
+ * the stream. The sink owns its own error reporting.
+ */
 interface FrameSink {
     fun onFrame(frame: Frame, state: SessionState)
     /** The cable button was pressed (debounced rising edge). */
@@ -63,31 +67,45 @@ class ScopeSession(
     val state: StateFlow<SessionState> = _state
 
     @Volatile private var job: Job? = null
+    // The following are only ever read/written from the session coroutine (started in `start()`,
+    // confined to `workDispatcher`), so they need no synchronization of their own.
     private var lastDriverId: String? = null
     private var prevButton = false
-    private var lastButtonNanos = Long.MIN_VALUE / 2
+    private var lastButtonNanos: Long? = null
 
     fun start() {
         if (job != null) return
         job = scope.launch(workDispatcher) {
             while (isActive) {
-                val found = findDevice()
-                if (found == null) {
-                    _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck())) }
-                } else {
-                    session(found.first, found.second)
+                try {
+                    val found = findDevice()
+                    if (found == null) {
+                        _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck())) }
+                    } else {
+                        session(found.first, found.second)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _state.update { it.copy(connection = ConnectionState.Failed(e.message ?: e.javaClass.simpleName)) }
                 }
                 delay(pollMillis)
             }
         }
     }
 
-    /** Cancels the loop and waits (bounded) until the transport is closed. Safe to call from any thread. */
-    fun stop(timeoutMillis: Long = 3_000) {
-        val j = job ?: return
-        job = null
+    /**
+     * Cancels the loop and blocks the calling thread up to [timeoutMillis] waiting for the
+     * transport to close. Returns true if the join completed within the timeout, false if it
+     * timed out. Safe to call from any thread; on Android call it off the main thread or from a
+     * lifecycle teardown that tolerates blocking.
+     */
+    fun stop(timeoutMillis: Long = 3_000): Boolean {
+        val j = job ?: return true
         j.cancel()
-        runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } }
+        val joined = runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } } != null
+        job = null
+        return joined
     }
 
     fun rotate() = _state.update { if (it.recording) it else it.copy(rotation = (it.rotation + 90) % 360) }
@@ -103,12 +121,14 @@ class ScopeSession(
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
-        if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            // Only reset rotation/mirror to the driver default once the device has actually opened,
+            // so a device that keeps failing to open does not wipe the user's rotation every poll.
+            if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
             lastDriverId = driver.id
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             val src = source
@@ -124,7 +144,7 @@ class ScopeSession(
             _state.update { it.copy(connection = ConnectionState.Failed(e.message ?: e.javaClass.simpleName)) }
         } finally {
             _state.update { it.copy(recording = false) }
-            source?.close()
+            source?.let { runCatching { it.close() } }
             if (source == null) transport?.let { runCatching { it.close() } }
             prevButton = false
         }
@@ -132,10 +152,11 @@ class ScopeSession(
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
         _state.update { it.copy(stats = stats) }
-        sink.onFrame(frame, _state.value)
-        if (frame.buttonPressed && !prevButton && frame.timestampNanos - lastButtonNanos > BUTTON_DEBOUNCE_NANOS) {
+        runCatching { sink.onFrame(frame, _state.value) }.onFailure { /* drop the frame; the shell owns its own error reporting */ }
+        val last = lastButtonNanos
+        if (frame.buttonPressed && !prevButton && (last == null || frame.timestampNanos - last > BUTTON_DEBOUNCE_NANOS)) {
             lastButtonNanos = frame.timestampNanos
-            sink.onButtonSnapshot()
+            runCatching { sink.onButtonSnapshot() }.onFailure { /* drop the frame; the shell owns its own error reporting */ }
         }
         prevButton = frame.buttonPressed
     }
