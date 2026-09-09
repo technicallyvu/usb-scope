@@ -1,11 +1,11 @@
 package com.technicallyvu.scope.desktop
 
 import com.technicallyvu.scope.core.driver.DriverRegistry
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.PacketSink
 import com.technicallyvu.scope.core.fixture.PacketLogWriter
+import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
 import com.technicallyvu.scope.core.usb.UsbException
-import com.technicallyvu.scope.core.useeplus.UseeplusDriver
-import com.technicallyvu.scope.core.useeplus.UseeplusPacket
 import com.technicallyvu.scope.desktop.usb.LibUsbDevices
 import com.technicallyvu.scope.desktop.usb.WindowsDeviceCheck
 import kotlinx.coroutines.runBlocking
@@ -28,20 +28,20 @@ fun main(args: Array<String>) {
         println("USB devices visible to libusb (${refs.size}):")
         for (r in refs) {
             val driver = DriverRegistry.find(r.info)
-            println("  %s  bus %d addr %d  class 0x%02X  %s".format(r.info.idString, r.bus, r.address, r.info.usbClass, driver?.let { "<- ${it.id}" } ?: ""))
+            val ifaces = r.info.interfaces.joinToString(" ") { "if%d:%02X/%02X/%02X".format(it.number, it.usbClass, it.subclass, it.protocol) }
+            println("  %s  bus %d addr %d  class 0x%02X  %s  %s".format(r.info.idString, r.bus, r.address, r.info.usbClass, ifaces, driver?.let { "<- ${it.id}" } ?: ""))
         }
         if (args.contains("--list")) return
 
         val ref = refs.firstOrNull { DriverRegistry.find(it.info) != null }
         if (ref == null) {
-            val hint = if (WindowsDeviceCheck.isPresentWithoutDriver(UseeplusDriver.SUPPORTED_IDS))
+            val hint = if (WindowsDeviceCheck.isPresentWithoutDriver(I4seasonYuvDriver.SUPPORTED_IDS))
                 "The endoscope is plugged in but has no WinUSB driver. Follow docs/windows-setup.md (Zadig)."
             else "No supported device found. Plug in the endoscope and try again."
             System.err.println(hint)
             exitProcess(2)
         }
 
-        val flagsHistogram = sortedMapOf<Int, Int>()
         var packets = 0L
         val writer = record?.let { path ->
             path.parent?.let { Files.createDirectories(it) }
@@ -49,17 +49,16 @@ fun main(args: Array<String>) {
         }
         val sink = PacketSink { p, len, ts ->
             packets++
-            UseeplusPacket.parse(p, len)?.let { c -> flagsHistogram.merge(c.flags, 1, Int::plus) }
             writer?.onPacket(p, len, ts)
         }
 
-        val driver = UseeplusDriver(packetSink = sink)
+        val driver = DriverRegistry.find(ref.info)!!.withPacketSink(sink)
         println("Opening ${ref.info.idString} with ${driver.id} ...")
         val transport = try {
             devices.open(ref)
         } catch (e: UsbException) {
             System.err.println("Could not open ${ref.info.idString}: ${e.message}")
-            if (WindowsDeviceCheck.isPresentWithoutDriver(UseeplusDriver.SUPPORTED_IDS)) {
+            if (WindowsDeviceCheck.isPresentWithoutDriver(I4seasonYuvDriver.SUPPORTED_IDS)) {
                 System.err.println("Windows has no WinUSB driver bound to the endoscope. Follow docs/windows-setup.md (Zadig), re-plug, and try again.")
             }
             exitProcess(2)
@@ -78,7 +77,8 @@ fun main(args: Array<String>) {
                     val now = System.nanoTime()
                     if (now - lastReport >= 1_000_000_000L) {
                         val st = source.stats.value
-                        println("  %.1f fps  frames=%d dropped=%d bytes=%d  jpeg=%d B".format(st.fps, st.framesEmitted, st.framesDropped, st.bytesReceived, f.jpeg.size))
+                        val kind = when (val d = f.data) { is FrameData.Jpeg -> "jpeg ${d.bytes.size} B"; is FrameData.Yuyv422 -> "yuyv ${d.width}x${d.height}" }
+                        println("  %.1f fps  frames=%d dropped=%d bytes=%d  %s".format(st.fps, st.framesEmitted, st.framesDropped, st.bytesReceived, kind))
                         lastReport = now
                     }
                 }
@@ -87,7 +87,6 @@ fun main(args: Array<String>) {
         source.close()
         writer?.close()
         println("Done. frames=$frames buttonFrames=$buttonFrames packets=$packets")
-        println("flags histogram (flags value -> packet count): $flagsHistogram")
     }
 }
 

@@ -1,5 +1,6 @@
 package com.technicallyvu.scope.desktop.media
 
+import com.technicallyvu.scope.core.driver.FrameData
 import org.apache.commons.imaging.Imaging
 import org.apache.commons.imaging.formats.jpeg.JpegImageMetadata
 import org.apache.commons.imaging.formats.tiff.constants.TiffTagConstants
@@ -49,5 +50,18 @@ class SnapshotWriterTest {
         val b = SnapshotWriter.write(jpeg(), 0, false, dir, t)
         assertTrue(a != b)
         assertTrue(Files.exists(a) && Files.exists(b))
+    }
+
+    @Test
+    fun `yuyv frames are jpeg-encoded and tagged`(@TempDir dir: Path) {
+        val b = ByteArray(16 * 8 * 2)
+        for (i in b.indices step 4) { b[i] = 235.toByte(); b[i + 1] = 128.toByte(); b[i + 2] = 235.toByte(); b[i + 3] = 128.toByte() }
+        val path = SnapshotWriter.write(FrameData.Yuyv422(16, 8, b), 90, false, dir, LocalDateTime.of(2026, 9, 8, 15, 0, 0))
+        assertEquals("SCOPE_20260908_150000.jpg", path.fileName.toString())
+        val img = requireNotNull(ImageIO.read(path.toFile()))
+        assertEquals(16, img.width)
+        assertTrue((img.getRGB(3, 3) and 0xFF) > 240, "should be near white")
+        val meta = requireNotNull(Imaging.getMetadata(Files.readAllBytes(path)) as? JpegImageMetadata)
+        assertEquals(6, meta.findExifValue(TiffTagConstants.TIFF_TAG_ORIENTATION).intValue)
     }
 }

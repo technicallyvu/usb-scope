@@ -4,7 +4,9 @@ import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
+import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.core.usb.UsbTransport
+import org.usb4java.ConfigDescriptor
 import org.usb4java.Context
 import org.usb4java.Device
 import org.usb4java.DeviceDescriptor
@@ -50,7 +52,30 @@ class LibUsbDevices : DeviceSource, AutoCloseable {
             vendorId = d.idVendor().toInt() and 0xFFFF,
             productId = d.idProduct().toInt() and 0xFFFF,
             usbClass = d.bDeviceClass().toInt() and 0xFF,
+            interfaces = interfaces(dev),
         )
+    }
+
+    /** Interfaces (alt setting 0) of the active configuration; empty if libusb cannot read it. */
+    private fun interfaces(dev: Device): List<UsbInterfaceInfo> {
+        val cfg = ConfigDescriptor()
+        var r = LibUsb.getActiveConfigDescriptor(dev, cfg)
+        if (r != LibUsb.SUCCESS) r = LibUsb.getConfigDescriptor(dev, 0, cfg)
+        if (r != LibUsb.SUCCESS) return emptyList()
+        try {
+            return cfg.iface().mapNotNull { i ->
+                i.altsetting().firstOrNull()?.let { a ->
+                    UsbInterfaceInfo(
+                        number = a.bInterfaceNumber().toInt() and 0xFF,
+                        usbClass = a.bInterfaceClass().toInt() and 0xFF,
+                        subclass = a.bInterfaceSubClass().toInt() and 0xFF,
+                        protocol = a.bInterfaceProtocol().toInt() and 0xFF,
+                    )
+                }
+            }
+        } finally {
+            LibUsb.freeConfigDescriptor(cfg)
+        }
     }
 
     private fun <T> withDeviceList(block: (DeviceList) -> T): T {

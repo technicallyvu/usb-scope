@@ -2,6 +2,7 @@ package com.technicallyvu.scope.desktop.ui
 
 import com.technicallyvu.scope.core.driver.DeviceDriver
 import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
 import com.technicallyvu.scope.core.usb.DeviceRef
@@ -38,8 +39,8 @@ data class UiState(
     val outputDir: Path,
     val connection: ConnectionState = ConnectionState.NoDevice(false),
     val image: BufferedImage? = null,
-    /** Sensor is mounted sideways; 90 shows the picture upright for most units. */
-    val rotation: Int = 90,
+    /** Sensor is mounted sideways; set from the driver's defaultRotation once a device is found. */
+    val rotation: Int = 0,
     val mirror: Boolean = false,
     val stats: StreamStats = StreamStats(),
     val recording: Boolean = false,
@@ -68,7 +69,7 @@ class ScopeViewModel(
 
     private val recorderLock = Any()
     private var job: Job? = null
-    @Volatile private var lastJpeg: ByteArray? = null
+    @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: BufferedImage? = null
     @Volatile private var recorder: Mp4Recorder? = null
     private var recorderGeneration = 0L
@@ -97,10 +98,10 @@ class ScopeViewModel(
     }
 
     fun snapshot() {
-        val jpeg = lastJpeg ?: return
+        val data = lastFrame ?: return
         val s = _state.value
         val path = try {
-            SnapshotWriter.write(jpeg, s.rotation, s.mirror, s.outputDir)
+            SnapshotWriter.write(data, s.rotation, s.mirror, s.outputDir)
         } catch (e: Exception) {
             System.err.println("Snapshot failed: ${e.message}")
             return
@@ -163,6 +164,7 @@ class ScopeViewModel(
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
+        _state.update { it.copy(rotation = driver.defaultRotation) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
         try {
@@ -192,17 +194,17 @@ class ScopeViewModel(
             stopRecording()
             source?.close()
             if (source == null) transport?.let { runCatching { it.close() } }
-            lastJpeg = null
+            lastFrame = null
             lastImage = null
             prevButton = false
         }
     }
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
-        val decoded = ImageTransforms.decodeJpeg(frame.jpeg) ?: return
+        val decoded = ImageTransforms.decode(frame.data) ?: return
         val s = _state.value
         val shown = ImageTransforms.apply(decoded, s.rotation, s.mirror)
-        lastJpeg = frame.jpeg
+        lastFrame = frame.data
         lastImage = shown
         synchronized(recorderLock) {
             recorder?.let { rec ->

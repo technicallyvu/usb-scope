@@ -1,12 +1,18 @@
 package com.technicallyvu.scope.desktop.media
 
+import com.technicallyvu.scope.core.driver.FrameData
 import org.apache.commons.imaging.formats.jpeg.exif.ExifRewriter
 import org.apache.commons.imaging.formats.tiff.constants.TiffTagConstants
 import org.apache.commons.imaging.formats.tiff.write.TiffOutputSet
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import javax.imageio.IIOImage
+import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
 
 /** Saves the sensor's original JPEG bytes plus an EXIF orientation tag for the chosen view transform. */
 object SnapshotWriter {
@@ -31,6 +37,29 @@ object SnapshotWriter {
         180 -> if (mirror) 4 else 3
         270 -> if (mirror) 5 else 8
         else -> 1
+    }
+
+    fun write(data: FrameData, rotationDegrees: Int, mirror: Boolean, dir: Path, now: LocalDateTime = LocalDateTime.now()): Path {
+        val jpeg = when (data) {
+            is FrameData.Jpeg -> data.bytes
+            is FrameData.Yuyv422 -> encodeJpeg(ImageTransforms.yuyvToImage(data))
+        }
+        return write(jpeg, rotationDegrees, mirror, dir, now)
+    }
+
+    private fun encodeJpeg(img: BufferedImage, quality: Float = 0.92f): ByteArray {
+        val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
+        val params = writer.defaultWriteParam.apply {
+            compressionMode = ImageWriteParam.MODE_EXPLICIT
+            compressionQuality = quality
+        }
+        val out = ByteArrayOutputStream()
+        ImageIO.createImageOutputStream(out).use { ios ->
+            writer.output = ios
+            writer.write(null, IIOImage(img, null, null), params)
+        }
+        writer.dispose()
+        return out.toByteArray()
     }
 
     internal fun uniquePath(dir: Path, base: String, ext: String): Path {

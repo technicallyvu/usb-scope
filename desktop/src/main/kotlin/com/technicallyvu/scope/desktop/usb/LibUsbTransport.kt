@@ -44,6 +44,21 @@ class LibUsbTransport(private val handle: DeviceHandle) : UsbTransport {
         return n
     }
 
+    override fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, data: ByteArray, timeoutMs: Int): Int {
+        val buf = ByteBuffer.allocateDirect(data.size)
+        if (requestType and 0x80 == 0) {
+            buf.put(data)
+            buf.rewind()
+        }
+        val r = LibUsb.controlTransfer(handle, requestType.toByte(), request.toByte(), value.toShort(), index.toShort(), buf, timeoutMs.toLong())
+        if (r < 0) throw UsbException("controlTransfer %02X/%02X failed: %s".format(requestType, request, LibUsb.strError(r)), r)
+        if (requestType and 0x80 != 0 && r > 0) {
+            buf.rewind()
+            buf.get(data, 0, r)
+        }
+        return r
+    }
+
     override fun resetDevice() = check(LibUsb.resetDevice(handle), "resetDevice")
 
     override fun close() {
