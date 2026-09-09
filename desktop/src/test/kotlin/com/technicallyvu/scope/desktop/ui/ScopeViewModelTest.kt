@@ -9,6 +9,7 @@ import com.technicallyvu.scope.core.usb.UsbTransport
 import com.technicallyvu.scope.core.useeplus.UseeplusDriver
 import com.technicallyvu.scope.core.useeplus.UseeplusPacket
 import com.technicallyvu.scope.desktop.TestPackets
+import com.technicallyvu.scope.desktop.media.Mp4Recorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,8 +34,20 @@ class ScopeViewModelTest {
         override fun open(ref: DeviceRef) = opener()
     }
 
-    private fun vm(devices: DeviceSource, dir: Path, hint: () -> Boolean = { false }) =
-        ScopeViewModel(devices, listOf(UseeplusDriver(ioDispatcher = Dispatchers.Default)), scope, dir, driverHintCheck = hint, pollMillis = 50)
+    private fun vm(
+        devices: DeviceSource,
+        dir: Path,
+        hint: () -> Boolean = { false },
+        recorderFactory: (Path, Int, Int) -> Mp4Recorder = { f, w, h -> Mp4Recorder(f, w, h) },
+    ) = ScopeViewModel(
+        devices,
+        listOf(UseeplusDriver(ioDispatcher = Dispatchers.Default)),
+        scope,
+        dir,
+        driverHintCheck = hint,
+        pollMillis = 50,
+        recorderFactory = recorderFactory,
+    )
 
     @AfterEach
     fun tearDown() = scope.cancel()
@@ -43,7 +56,12 @@ class ScopeViewModelTest {
     fun `no device shows waiting state with driver hint`(@TempDir dir: Path) = runBlocking {
         val vm = vm(FakeDevices(emptyList()) { error("unused") }, dir, hint = { true })
         vm.start()
-        val s = withTimeout(2_000) { vm.state.first { it.connection is ConnectionState.NoDevice && (it.connection as ConnectionState.NoDevice).needsDriverHint } }
+        val s = withTimeout(2_000) {
+            vm.state.first {
+                val conn = it.connection
+                conn is ConnectionState.NoDevice && conn.needsDriverHint
+            }
+        }
         assertTrue(s.image == null)
         vm.stop()
     }
@@ -52,7 +70,12 @@ class ScopeViewModelTest {
     fun `open failure without a prior stream reports NoDevice with hint or Failed`(@TempDir dir: Path) = runBlocking {
         val vmHint = vm(FakeDevices(listOf(ref)) { throw UsbException("open failed") }, dir, hint = { true })
         vmHint.start()
-        withTimeout(2_000) { vmHint.state.first { it.connection is ConnectionState.NoDevice && (it.connection as ConnectionState.NoDevice).needsDriverHint } }
+        withTimeout(2_000) {
+            vmHint.state.first {
+                val conn = it.connection
+                conn is ConnectionState.NoDevice && conn.needsDriverHint
+            }
+        }
         vmHint.stop()
 
         val vmNoHint = vm(FakeDevices(listOf(ref)) { throw UsbException("open failed") }, dir, hint = { false })
@@ -70,8 +93,9 @@ class ScopeViewModelTest {
         val streaming = withTimeout(5_000) { vm.state.first { it.image != null } }
         assertTrue(streaming.connection is ConnectionState.Streaming)
         // default rotation is 90: the 32x24 sensor frame shows as 24x32
-        assertEquals(24, streaming.image!!.width)
-        assertEquals(32, streaming.image!!.height)
+        val img = requireNotNull(streaming.image)
+        assertEquals(24, img.width)
+        assertEquals(32, img.height)
         devices.refs = emptyList()
         withTimeout(5_000) { vm.state.first { it.connection is ConnectionState.NoDevice } }
         vm.stop()
@@ -113,6 +137,20 @@ class ScopeViewModelTest {
         assertTrue(Files.size(mp4) > 500)
         vm.rotate()
         assertEquals(180, vm.state.value.rotation)
+        vm.stop()
+    }
+
+    @Test
+    fun `failing recorder construction leaves recording off and writes no mp4`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }
+        val vm = vm(devices, dir, recorderFactory = { _, _, _ -> throw IllegalStateException("no encoder") })
+        vm.start()
+        withTimeout(5_000) { vm.state.first { it.image != null } }
+        vm.toggleRecording()
+        assertTrue(!vm.state.value.recording)
+        val names = Files.list(dir).use { it.toList() }.map { it.fileName.toString() }
+        assertTrue(names.none { it.endsWith(".mp4") }, "unexpected mp4 in $names")
         vm.stop()
     }
 }

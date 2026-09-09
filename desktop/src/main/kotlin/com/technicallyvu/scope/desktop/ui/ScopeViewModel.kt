@@ -7,6 +7,7 @@ import com.technicallyvu.scope.core.driver.StreamStats
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
+import com.technicallyvu.scope.core.usb.UsbTransport
 import com.technicallyvu.scope.desktop.media.ImageTransforms
 import com.technicallyvu.scope.desktop.media.Mp4Recorder
 import com.technicallyvu.scope.desktop.media.SnapshotWriter
@@ -49,6 +50,8 @@ data class UiState(
  * Owns the device session loop and every user action. UI-toolkit free so it is testable headless.
  * Runs on Dispatchers.Default; state is exposed as a StateFlow.
  * Action methods may be called from any thread; recording state is guarded by [recorderLock].
+ * The encoder is constructed outside the lock (start-up can take seconds) and only published
+ * under [recorderLock] once ready, so building it never stalls frame collection.
  */
 class ScopeViewModel(
     private val devices: DeviceSource,
@@ -94,12 +97,44 @@ class ScopeViewModel(
     fun snapshot() {
         val jpeg = lastJpeg ?: return
         val s = _state.value
-        val path = SnapshotWriter.write(jpeg, s.rotation, s.mirror, s.outputDir)
+        val path = try {
+            SnapshotWriter.write(jpeg, s.rotation, s.mirror, s.outputDir)
+        } catch (e: Exception) {
+            System.err.println("Snapshot failed: ${e.message}")
+            return
+        }
         _state.update { it.copy(lastSaved = path.fileName.toString()) }
     }
 
     fun toggleRecording() {
-        synchronized(recorderLock) { if (recorder != null) stopRecordingLocked() else startRecordingLocked() }
+        val active = synchronized(recorderLock) { recorder }
+        if (active != null) {
+            stopRecording()
+            return
+        }
+        val img = lastImage ?: return
+        val s = _state.value
+        val file = try {
+            Files.createDirectories(s.outputDir)
+            s.outputDir.resolve("SCOPE_" + LocalDateTime.now().format(FILE_STAMP) + ".mp4")
+        } catch (e: Exception) {
+            System.err.println("Recording could not start: ${e.message}")
+            return
+        }
+        val created = try {
+            recorderFactory(file, img.width, img.height)
+        } catch (e: Throwable) {
+            System.err.println("Recording could not start: ${e.message}")
+            return
+        }
+        synchronized(recorderLock) {
+            if (recorder != null) {          // lost a race with another start; keep the existing one
+                runCatching { created.close() }
+                return
+            }
+            recorder = created
+        }
+        _state.update { it.copy(recording = true, lastSaved = file.fileName.toString()) }
     }
 
     fun rotate() {
@@ -124,9 +159,10 @@ class ScopeViewModel(
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
+        var transport: UsbTransport? = null
         var source: FrameSource? = null
         try {
-            val transport = devices.open(ref)
+            transport = devices.open(ref)
             source = driver.open(transport)
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             val src = source
@@ -143,9 +179,13 @@ class ScopeViewModel(
                     image = null,
                 )
             }
+        } catch (e: Exception) {
+            System.err.println("Session error: $e")
+            _state.update { it.copy(connection = ConnectionState.Failed(e.message ?: e.javaClass.simpleName), image = null) }
         } finally {
             stopRecording()
             source?.close()
+            if (source == null) transport?.let { runCatching { it.close() } }
             lastJpeg = null
             lastImage = null
             prevButton = false
@@ -158,27 +198,22 @@ class ScopeViewModel(
         val shown = ImageTransforms.apply(decoded, s.rotation, s.mirror)
         lastJpeg = frame.jpeg
         lastImage = shown
-        synchronized(recorderLock) { recorder?.record(shown, frame.timestampNanos) }
+        synchronized(recorderLock) {
+            recorder?.let { rec ->
+                try {
+                    rec.record(shown, frame.timestampNanos)
+                } catch (e: Exception) {
+                    System.err.println("Recording stopped: ${e.message}")
+                    stopRecordingLocked()
+                }
+            }
+        }
         if (frame.buttonPressed && !prevButton && frame.timestampNanos - lastButtonSnapNanos > BUTTON_DEBOUNCE_NANOS) {
             lastButtonSnapNanos = frame.timestampNanos
             snapshot()
         }
         prevButton = frame.buttonPressed
         _state.update { it.copy(image = shown, stats = stats) }
-    }
-
-    private fun startRecordingLocked() {
-        val img = lastImage ?: return
-        val s = _state.value
-        Files.createDirectories(s.outputDir)
-        val file = s.outputDir.resolve("SCOPE_" + LocalDateTime.now().format(FILE_STAMP) + ".mp4")
-        recorder = try {
-            recorderFactory(file, img.width, img.height)
-        } catch (e: Exception) {
-            System.err.println("Recording could not start: ${e.message}")
-            return
-        }
-        _state.update { it.copy(recording = true, lastSaved = file.fileName.toString()) }
     }
 
     private fun stopRecordingLocked() {

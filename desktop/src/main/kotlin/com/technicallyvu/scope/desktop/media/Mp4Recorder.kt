@@ -30,7 +30,7 @@ class Mp4Recorder(file: Path, width: Int, height: Int, nominalFps: Double = 15.0
     init {
         try {
             recorder.start()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             runCatching { recorder.release() }
             runCatching { converter.close() }
             throw e
