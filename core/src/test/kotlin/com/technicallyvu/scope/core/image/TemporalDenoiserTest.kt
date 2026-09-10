@@ -79,6 +79,43 @@ class TemporalDenoiserTest {
     }
 
     @Test
+    fun `a single bright pixel moving inside a block leaves no ghost`() {
+        // The block mean is blind to this: one bright sample moving within the same 4x4 block keeps
+        // the block's mean luma exactly constant, so only the max per-sample difference catches it.
+        val d = TemporalDenoiser(strength = 0.9f)
+        var last: FrameData.Yuyv422? = null
+        for (k in 0 until 4) {
+            val b = ByteArray(w * h * 2) { i -> if (i % 2 == 0) 20 else 128.toByte() }
+            b[(1 * w + k) * 2] = 235.toByte()          // inside the 4x4 block at (0,0)
+            last = d.apply(FrameData.Yuyv422(w, h, b))
+        }
+        val out = requireNotNull(last).bytes
+        val atOld = out[(1 * w + 2) * 2].toInt() and 0xFF
+        val atNew = out[(1 * w + 3) * 2].toInt() and 0xFF
+        assertTrue(atOld < 40, "previous pixel position should have no ghost, got $atOld")
+        assertTrue(atNew > 220, "current pixel position should be bright, got $atNew")
+    }
+
+    @Test
+    fun `a bar offset from the block grid is not smeared`() {
+        val d = TemporalDenoiser(strength = 0.9f)
+        var last: FrameData.Yuyv422? = null
+        for (k in 0 until 6) {
+            val b = ByteArray(w * h * 2) { i -> if (i % 2 == 0) 20 else 128.toByte() }
+            val x0 = 2 + k * 4                          // straddles the 4-pixel block grid
+            for (y in 0 until h) for (x in x0 until x0 + 4) b[(y * w + x) * 2] = 235.toByte()
+            last = d.apply(FrameData.Yuyv422(w, h, b))
+        }
+        val out = requireNotNull(last).bytes
+        val barX = 2 + 5 * 4 + 1
+        val oldX = 2 + 4 * 4 + 1
+        val atBar = out[(3 * w + barX) * 2].toInt() and 0xFF
+        val atOld = out[(3 * w + oldX) * 2].toInt() and 0xFF
+        assertTrue(atBar > 220, "bar position should be bright, got $atBar")
+        assertTrue(atOld < 40, "old bar position should have no ghost, got $atOld")
+    }
+
+    @Test
     fun `size change resets history`() {
         val d = TemporalDenoiser()
         d.apply(noisy(Random(3), 20))
@@ -97,7 +134,8 @@ class TemporalDenoiserTest {
         repeat(8) {
             px = IntArray(w * h) { i ->
                 val v = ((ref[i] and 0xFF) + rnd.nextInt(-20, 21)).coerceIn(0, 255)
-                0xFF000000.toInt() or (v * 0x010101)
+                // Seeded half-transparent on purpose: the filter must publish opaque pixels.
+                0x80000000.toInt() or (v * 0x010101)
             }
             rawErr = px.indices.sumOf { abs((px[it] and 0xFF) - (ref[it] and 0xFF)) }.toDouble() / px.size
             d.applyArgb(px, w, h)
@@ -105,6 +143,6 @@ class TemporalDenoiserTest {
         val err = px.indices.sumOf { abs((px[it] and 0xFF) - (ref[it] and 0xFF)) }.toDouble() / px.size
         // Same steady-state reasoning as the YUYV test above: expected ratio ~0.6, bound at 0.7.
         assertTrue(err < rawErr * 0.7, "argb denoised error $err vs raw $rawErr")
-        assertTrue(px.all { (it ushr 24) == 0xFF })
+        assertTrue(px.all { (it ushr 24) == 0xFF }, "alpha 0x80 in must come out 0xFF")
     }
 }

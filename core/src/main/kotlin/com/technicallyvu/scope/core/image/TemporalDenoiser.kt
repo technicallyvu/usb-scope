@@ -11,7 +11,17 @@ import kotlin.math.abs
  * moving edge. A small [NOISE_FLOOR] is then subtracted from that motion value (floored at 0) so
  * residual noise in the block mean doesn't nudge the blend away from the static weight. The weight
  * of the current frame is 1.0 where the floored motion is >= [motionThreshold] and
- * `1 - 0.8*strength` where motion is 0, linear in between. Not thread-safe: one instance per stream.
+ * `1 - 0.8*strength` where motion is 0, linear in between.
+ *
+ * The block mean alone has a blind spot: a small high-contrast feature moving *inside* one block
+ * (or a bright bar sliding across a block boundary) can leave the block's mean unchanged, so the
+ * filter would treat it as static and smear it. Alongside the mean, each block therefore also
+ * tracks its largest per-sample absolute luma difference; when that maximum reaches
+ * `2 * motionThreshold` the block is forced to full pass-through (`a = 256`) regardless of the
+ * mean. The doubled threshold keeps noise immunity: frame-to-frame sensor noise of +-20 rarely
+ * reaches 48, while a moving feature against its background clears it easily.
+ *
+ * Not thread-safe: one instance per stream.
  */
 class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, val blockSize: Int = 4) {
     var strength: Float = strength.coerceIn(0f, 1f)
@@ -22,9 +32,19 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
     private var prevW = 0
     private var prevH = 0
 
+    init { require(blockSize > 0) { "blockSize must be > 0, was $blockSize" } }
+
     fun reset() { prevYuyv = null; prevArgb = null; prevW = 0; prevH = 0 }
 
-    private fun staticWeight256(): Int = ((1f - 0.8f * strength) * 256f).toInt().coerceIn(32, 256)
+    private fun staticWeight256(): Int = ((1f - 0.8f * strength) * 256f).toInt().coerceIn(0, 256)
+
+    /** The blend weight (0..256) for a block, from its mean-luma motion and its largest per-sample difference. */
+    private fun weight256(motion: Int, maxDiff: Int, aStatic: Int): Int {
+        if (maxDiff >= 2 * motionThreshold) return 256
+        val m = maxOf(0, motion - NOISE_FLOOR)
+        if (m >= motionThreshold) return 256
+        return aStatic + (256 - aStatic) * m / motionThreshold
+    }
 
     companion object {
         /** Subtracted from the block-mean motion metric before thresholding, to absorb residual noise. */
@@ -48,18 +68,18 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
             var bx = 0
             while (bx < w) {
                 val bw = minOf(blockSize, w - bx)
-                var curSum = 0; var prevSum = 0; var count = 0
+                var curSum = 0; var prevSum = 0; var count = 0; var maxDiff = 0
                 for (y in by until by + bh) {
                     var i = y * rowBytes + bx * 2
                     for (x in 0 until bw) {
-                        curSum += (src[i].toInt() and 0xFF)
-                        prevSum += (prev[i].toInt() and 0xFF)
+                        val c = src[i].toInt() and 0xFF
+                        val p = prev[i].toInt() and 0xFF
+                        curSum += c; prevSum += p
+                        val d = abs(c - p); if (d > maxDiff) maxDiff = d
                         i += 2; count++
                     }
                 }
-                val motion = abs(curSum - prevSum) / count
-                val m = maxOf(0, motion - NOISE_FLOOR)
-                val a = if (m >= motionThreshold) 256 else aStatic + (256 - aStatic) * m / motionThreshold
+                val a = weight256(abs(curSum - prevSum) / count, maxDiff, aStatic)
                 for (y in by until by + bh) {
                     val start = y * rowBytes + bx * 2
                     val end = start + bw * 2
@@ -79,6 +99,7 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
 
     /** In-place ARGB_8888 variant (for decoded JPEG frames). */
     fun applyArgb(pixels: IntArray, width: Int, height: Int) {
+        require(pixels.size >= width * height) { "pixels (${pixels.size}) shorter than ${width}x$height" }
         val prev = prevArgb
         if (prev == null || prevW != width || prevH != height || prev.size != pixels.size) {
             prevArgb = pixels.copyOf(); prevYuyv = null; prevW = width; prevH = height
@@ -91,14 +112,15 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
             var bx = 0
             while (bx < width) {
                 val bw = minOf(blockSize, width - bx)
-                var curSum = 0; var prevSum = 0; var count = 0
+                var curSum = 0; var prevSum = 0; var count = 0; var maxDiff = 0
                 for (y in by until by + bh) for (x in bx until bx + bw) {
                     val i = y * width + x
-                    curSum += luma(pixels[i]); prevSum += luma(prev[i]); count++
+                    val c = luma(pixels[i]); val p = luma(prev[i])
+                    curSum += c; prevSum += p
+                    val d = abs(c - p); if (d > maxDiff) maxDiff = d
+                    count++
                 }
-                val motion = abs(curSum - prevSum) / count
-                val m = maxOf(0, motion - NOISE_FLOOR)
-                val a = if (m >= motionThreshold) 256 else aStatic + (256 - aStatic) * m / motionThreshold
+                val a = weight256(abs(curSum - prevSum) / count, maxDiff, aStatic)
                 for (y in by until by + bh) for (x in bx until bx + bw) {
                     val i = y * width + x
                     val c = pixels[i]; val p = prev[i]

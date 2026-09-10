@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.core.session
 
 import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.fixture.LoggedPacket
 import com.technicallyvu.scope.core.fixture.ReplayTransport
 import com.technicallyvu.scope.core.i4season.I4seasonTestFrames
@@ -77,13 +78,25 @@ class ScopeSessionTest {
     }
 
     private class CountingSink : FrameSink {
-        val frames = AtomicInteger(); val buttons = AtomicInteger(); @Volatile var lastState: SessionState? = null
-        override fun onFrame(frame: Frame, state: SessionState) { frames.incrementAndGet(); lastState = state }
+        val frames = AtomicInteger(); val buttons = AtomicInteger(); val starts = AtomicInteger()
+        @Volatile var lastState: SessionState? = null
+        @Volatile var lastFrame: Frame? = null
+        @Volatile var frameBeforeStart = false
+        override fun onFrame(frame: Frame, state: SessionState) {
+            if (starts.get() == 0) frameBeforeStart = true
+            frames.incrementAndGet(); lastState = state; lastFrame = frame
+        }
         override fun onButtonSnapshot() { buttons.incrementAndGet() }
+        override fun onStreamStarted() { starts.incrementAndGet() }
     }
 
-    private fun stream(frames: Int, buttonOn: Set<Int> = emptySet(), loop: Boolean = false): ReplayTransport {
-        val bytes = (1..frames).fold(ByteArray(0)) { acc, i -> acc + I4seasonTestFrames.frame(4, 2, flags = if (i in buttonOn) 0x02 else 0, fill = i.toByte()) }
+    private fun stream(
+        frames: Int,
+        buttonOn: Set<Int> = emptySet(),
+        loop: Boolean = false,
+        fill: (Int) -> Byte = { it.toByte() },
+    ): ReplayTransport {
+        val bytes = (1..frames).fold(ByteArray(0)) { acc, i -> acc + I4seasonTestFrames.frame(4, 2, flags = if (i in buttonOn) 0x02 else 0, fill = fill(i)) }
         return ReplayTransport(I4seasonTestFrames.chunked(bytes, 100), loop = loop, sleep = Thread::sleep, videoEndpoint = I4seasonYuvDriver.EP_IN).apply {
             controlResponses[0xA0 to 0x00] = I4seasonTestFrames.info(4, 2)
         }
@@ -250,13 +263,65 @@ class ScopeSessionTest {
     @Test
     fun `denoise replaces YUV frame data and can be toggled`() = runBlocking<Unit> {
         val sink = CountingSink()
-        val devices = FakeDevices(listOf(ref)) { stream(6, loop = true) }
+        // A payload that alternates between two *close* fills: the block-mean motion stays under the
+        // noise floor and the largest per-sample difference stays well under 2*motionThreshold, so
+        // the filter really blends. A big step would trip the pass-through override and the sink
+        // would see the raw bytes even with denoise on.
+        val devices = FakeDevices(listOf(ref)) {
+            stream(6, buttonOn = (1..6).toSet(), loop = true, fill = { i -> if (i % 2 == 1) FILL_A else FILL_B })
+        }
         val s = session(devices, sink)
         s.start()
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         assertTrue(s.state.value.denoise)
+
+        withTimeout(5_000) { while (sink.frames.get() < 4) kotlinx.coroutines.delay(10) }
+        val denoised = requireNotNull(sink.lastFrame)
+        val blended = (denoised.data as FrameData.Yuyv422).bytes
+        assertTrue(
+            blended.any { it != FILL_A && it != FILL_B },
+            "denoise on should deliver blended bytes, got ${blended.joinToString()}",
+        )
+        // Everything but the pixels is carried across the swap untouched.
+        assertTrue(denoised.timestampNanos != 0L, "timestampNanos must survive the denoise swap")
+        assertTrue(denoised.buttonPressed, "buttonPressed must survive the denoise swap")
+        assertEquals(0, denoised.cameraNumber)
+        assertEquals(0, denoised.sensorValue)
+
         s.setDenoise(false)
         withTimeout(2_000) { s.state.first { !it.denoise } }
+        val before = sink.frames.get()
+        withTimeout(5_000) { while (sink.frames.get() < before + 3) kotlinx.coroutines.delay(10) }
+        val raw = (requireNotNull(sink.lastFrame).data as FrameData.Yuyv422).bytes
+        assertTrue(
+            raw.all { it == raw[0] } && (raw[0] == FILL_A || raw[0] == FILL_B),
+            "denoise off must deliver the frame's raw bytes, got ${raw.joinToString()}",
+        )
         s.stop()
+    }
+
+    @Test
+    fun `onStreamStarted fires once per session start, before the first frame`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val first = EndableTransport(stream(6, loop = true))
+        val devices = FakeDevices(listOf(ref)) { first }
+        val s = session(devices, sink)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        withTimeout(5_000) { while (sink.frames.get() < 3) kotlinx.coroutines.delay(10) }
+        assertEquals(1, sink.starts.get(), "one stream start, one onStreamStarted")
+        assertFalse(sink.frameBeforeStart, "onStreamStarted must precede the stream's first frame")
+
+        devices.opener = { stream(6, loop = true) }
+        first.endNow = true
+        withTimeout(5_000) { while (sink.starts.get() < 2) kotlinx.coroutines.delay(10) }
+        kotlinx.coroutines.delay(300)   // several poll intervals: nothing else may start a stream
+        assertEquals(2, sink.starts.get(), "a reconnect is exactly one more stream start")
+        s.stop()
+    }
+
+    private companion object {
+        const val FILL_A: Byte = 100
+        const val FILL_B: Byte = 103
     }
 }

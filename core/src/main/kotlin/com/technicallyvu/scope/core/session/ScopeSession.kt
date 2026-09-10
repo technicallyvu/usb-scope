@@ -50,6 +50,13 @@ interface FrameSink {
     fun onFrame(frame: Frame, state: SessionState)
     /** The cable button was pressed (debounced rising edge). */
     fun onButtonSnapshot()
+    /**
+     * A device just opened and the session has entered [ConnectionState.Streaming]; the next
+     * [onFrame] belongs to a new stream. Sinks that keep per-stream history (a decoded-frame
+     * denoiser, for instance) reset it here. Called once per successful open, on the session's
+     * worker thread, before any frame of that stream.
+     */
+    fun onStreamStarted() {}
 }
 
 /**
@@ -151,6 +158,14 @@ class ScopeSession(
             lastDriverId = driver.id
             denoiser?.reset()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
+            // Same contract as onFrame: a throwing sink must not end the stream.
+            try {
+                sink.onStreamStarted()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // the sink owns its own error reporting
+            }
             val src = source
             src.frames.collect { frame -> onFrame(frame, src.stats.value) }
         } catch (e: CancellationException) {

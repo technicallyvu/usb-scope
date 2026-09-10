@@ -133,6 +133,16 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (token != currentSessionToken) return
             snapshot()
         }
+
+        /**
+         * A new stream: drop the ARGB denoiser's history so the first decoded JPEG frame of this
+         * device is never blended with the last frame of the previous one. (The YUV denoiser lives
+         * in [ScopeSession] and resets itself.)
+         */
+        override fun onStreamStarted() {
+            if (token != currentSessionToken) return
+            argbDenoiser.reset()
+        }
     }
 
     /**
