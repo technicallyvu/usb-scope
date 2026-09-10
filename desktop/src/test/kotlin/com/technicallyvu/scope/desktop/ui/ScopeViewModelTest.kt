@@ -8,6 +8,7 @@ import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbTransport
 import com.technicallyvu.scope.core.useeplus.UseeplusDriver
 import com.technicallyvu.scope.core.useeplus.UseeplusPacket
+import com.technicallyvu.scope.core.uvc.UvcUnsupportedException
 import com.technicallyvu.scope.desktop.TestPackets
 import com.technicallyvu.scope.desktop.media.Mp4Recorder
 import kotlinx.coroutines.CoroutineScope
@@ -24,8 +25,10 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 
 class ScopeViewModelTest {
@@ -226,6 +229,33 @@ class ScopeViewModelTest {
             "session finally had not run when stop() returned; calls=${transport.calls.takeLast(6)}",
         )
         assertTrue(elapsedMs < 3_000, "stop() took $elapsedMs ms")
+    }
+
+    @Test
+    fun `a device that can never open is skipped for good and the next one streams`(@TempDir dir: Path) = runBlocking {
+        // UvcBulkDriver matches any UVC function, so the first device enumerated can be a webcam it
+        // cannot drive. Without the skip set it would shadow the endoscope behind it forever.
+        val unopenable = ref
+        val scope = ref.copy(address = ref.address + 1)
+        val counts = ConcurrentHashMap<DeviceRef, AtomicInteger>()
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = object : DeviceSource {
+            override fun list() = listOf(unopenable, scope)
+            override fun open(ref: DeviceRef): UsbTransport {
+                counts.computeIfAbsent(ref) { AtomicInteger() }.incrementAndGet()
+                if (ref == unopenable) throw UvcUnsupportedException("this camera has no bulk streaming endpoint")
+                return ReplayTransport(packets, loop = true, sleep = Thread::sleep)
+            }
+        }
+        val vm = vm(devices, dir)
+        vm.start()
+        withTimeout(5_000) { vm.state.first { it.image != null } }
+        assertEquals(1, counts[unopenable]?.get(), "the unsupported device should have been tried exactly once")
+        assertTrue((counts[scope]?.get() ?: 0) >= 1, "the second device should have been opened")
+
+        Thread.sleep(300)   // several more poll intervals
+        assertEquals(1, counts[unopenable]?.get(), "a permanently unsupported device must never be opened again")
+        vm.stop()
     }
 
     @Test

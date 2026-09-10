@@ -266,11 +266,14 @@ Confirmed by Anthony 2026-09-10 (prompt-first). Three features on top of the acc
 - `core/image/TemporalDenoiser`: recursive blend of the current frame into the previous output with a
   per-block (4x4) adaptive weight. The motion metric is the absolute difference of the block's *mean*
   luma between the current and previous frame, less a small noise floor (4/255) and floored at 0:
-  full weight to the current frame where that reaches `motionThreshold` (24/255), down to
-  `1 - 0.8*strength` where static, linear in between. Because a block mean is blind to a small
-  high-contrast feature moving inside one block, the block's largest per-sample luma difference
-  forces full weight on its own once it reaches `2 x motionThreshold` (48/255) — high enough that
-  ordinary sensor noise never trips it. Works on YUYV bytes (applied inside `ScopeSession` for YUV frames, so both shells get it) and
+  full weight to the current frame where that reaches `motionThreshold` (24/255), down to the static
+  weight `1 - 0.8*strength` where static, linear in between. Because a block mean is blind to a small
+  high-contrast feature moving inside one block, each block also counts the samples whose per-sample
+  luma difference reaches `2 x motionThreshold` (48/255); **two or more** of them force full
+  pass-through regardless of the mean. The doubled threshold is high enough that ordinary sensor
+  noise never reaches it, and requiring a pair rules out the lone Gaussian outlier a single-sample
+  maximum would have mistaken for motion (anything that really moved shows up twice: where it was
+  and where it now is). Works on YUYV bytes (applied inside `ScopeSession` for YUV frames, so both shells get it) and
   on ARGB int arrays (applied by each shell after decoding JPEG frames). Reset on stream start or size
   change. Default on, strength 0.6; user toggle in both shells (`SessionState.denoise`).
 - Acceptance: unit tests show noise reduction on a static synthetic scene and no ghosting on a moving

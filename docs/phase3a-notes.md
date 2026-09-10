@@ -45,8 +45,9 @@ hardware). Denoise and the trust screen await Anthony's look on the phone the ne
   streaming interface is therefore refused by `open`, with a message, rather than silently not
   matching.
 
-- **The in-progress UVC frame is bounded.** The parser caps it at twice the negotiated (or declared)
-  `dwMaxVideoFrameSize`, with a 64 KiB floor — a stream that never sets EOF and never toggles the
+- **The in-progress UVC frame is bounded.** The parser caps it at twice the larger of the negotiated
+  (or declared) `dwMaxVideoFrameSize` and a 64 KiB floor — the floor is applied before the doubling,
+  so the smallest cap that can result is 128 KiB. A stream that never sets EOF and never toggles the
   frame id would otherwise buffer until the process died. Past the cap the frame is counted as
   dropped once and its bytes discarded until the next EOF or FID toggle resynchronises the stream.
   Malformed payload headers are counted separately (`badHeaders`) and mark a frame already under way
@@ -90,6 +91,11 @@ hardware). Denoise and the trust screen await Anthony's look on the phone the ne
   cleaner with no smear when the probe moves. The max-difference override was calibrated on uniform +-20 noise;
   if real sensor noise switches the filter off too often (grainy picture with denoise on), raise the override to
   3x the threshold.
+- **Denoise cost:** with the debug timing overlay up (`Stats` on a debug build), read `avgProcess` with denoise
+  **on** at 640x480 MJPEG. Record the number here. Above **25 ms/frame** the filter is eating the frame budget on
+  that phone, so ship with denoise defaulted **off** (`SessionState.denoise = false`) and leave it as an opt-in
+  toggle; at or below 25 ms leave the default on. 25 ms is the threshold because a 30 fps stream has a 33 ms
+  budget and decode plus draw need the rest.
 - **Trust screen:** open About & privacy on the phone; "Permissions requested: 0" and the build id should show.
   `source_url` is a placeholder until the GitHub repository exists.
 

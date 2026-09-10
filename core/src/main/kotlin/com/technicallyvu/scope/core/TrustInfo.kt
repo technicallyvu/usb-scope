@@ -51,9 +51,17 @@ object TrustInfo {
         "The single-interface YUV protocol was recovered by observing the device and reading the " +
             "publicly distributed vendor app; no vendor code is included."
 
+    /** Android: the claim rests on a permission the manifest does not ask for. */
     val noNetworkStatement: String =
         "This app does not request the INTERNET permission, so it cannot send anything anywhere. " +
             "It has no analytics, no crash reporting, and no accounts."
+
+    /**
+     * Desktop: there is no permission manifest to point at, so the claim is about the build itself.
+     * The Android sentence would be a half-truth here — a desktop JVM can always open a socket.
+     */
+    val desktopNoNetworkStatement: String =
+        "This build opens no network connections: no sockets, no telemetry, no updates check."
 
     val permissionsNotRequested: List<String> = listOf(
         "android.permission.INTERNET",

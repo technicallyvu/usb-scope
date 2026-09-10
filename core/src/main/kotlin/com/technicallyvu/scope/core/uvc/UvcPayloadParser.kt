@@ -47,9 +47,11 @@ class UvcPayloadParser(
     private val frameBuf = ByteArrayOutputStream(256 * 1024)
 
     /**
-     * Hard ceiling on the bytes buffered for one frame. Twice the declared frame size, with a 64 KiB
-     * floor, so that a legitimately over-long frame (a device that pads, or a JPEG that beats the
-     * declared maximum) still arrives while a runaway stream is cut off early.
+     * Hard ceiling on the bytes buffered for one frame: twice the larger of the declared frame size
+     * and a 64 KiB floor. The floor is applied *before* the doubling, so the smallest cap this can
+     * produce is 128 KiB however tiny the declared frame is. A legitimately over-long frame (a
+     * device that pads, or a JPEG that beats the declared maximum) still arrives; a runaway stream
+     * is cut off early.
      */
     private val frameCap: Long = run {
         val declared: Long = if (maxFrameBufferSize > 0) {

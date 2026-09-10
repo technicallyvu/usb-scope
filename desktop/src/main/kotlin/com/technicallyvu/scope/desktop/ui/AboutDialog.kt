@@ -22,8 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.rememberDialogState
 import com.technicallyvu.scope.core.TrustInfo
-
-private const val VERSION = "0.3.0 dev bench"
+import com.technicallyvu.scope.desktop.APP_VERSION
 
 /**
  * Read-only "About" window for the desktop dev bench: version, the no-network statement,
@@ -34,7 +33,7 @@ private const val VERSION = "0.3.0 dev bench"
 fun AboutDialog(onClose: () -> Unit) {
     DialogWindow(
         onCloseRequest = onClose,
-        title = "About USB Scope",
+        title = "About USB Scope $APP_VERSION",
         state = rememberDialogState(width = 520.dp, height = 640.dp),
     ) {
         MaterialTheme {
@@ -46,9 +45,11 @@ fun AboutDialog(onClose: () -> Unit) {
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text("USB Scope", style = MaterialTheme.typography.titleLarge)
-                        Text("Version $VERSION", style = MaterialTheme.typography.bodyMedium)
+                        Text("Version $APP_VERSION (dev bench)", style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider()
-                        Text(TrustInfo.noNetworkStatement, style = MaterialTheme.typography.bodyMedium)
+                        // Not the Android sentence: there is no permission manifest on the desktop
+                        // to point at, so the claim has to be about what this build does.
+                        Text(TrustInfo.desktopNoNetworkStatement, style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider()
                         Text(TrustInfo.protocolNote, style = MaterialTheme.typography.bodyMedium)
                         Text("Attributions", style = MaterialTheme.typography.titleSmall)

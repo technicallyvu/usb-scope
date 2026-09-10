@@ -81,7 +81,9 @@ class TemporalDenoiserTest {
     @Test
     fun `a single bright pixel moving inside a block leaves no ghost`() {
         // The block mean is blind to this: one bright sample moving within the same 4x4 block keeps
-        // the block's mean luma exactly constant, so only the max per-sample difference catches it.
+        // the block's mean luma exactly constant. Only the strong-difference override catches it —
+        // the pixel it left and the one it arrived at are the two samples past 2 * motionThreshold
+        // that MIN_STRONG_DIFFS asks for.
         val d = TemporalDenoiser(strength = 0.9f)
         var last: FrameData.Yuyv422? = null
         for (k in 0 until 4) {

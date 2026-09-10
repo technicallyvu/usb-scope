@@ -6,6 +6,7 @@ import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
 import com.technicallyvu.scope.core.image.TemporalDenoiser
+import com.technicallyvu.scope.core.session.DeviceCandidates
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
@@ -84,12 +85,14 @@ class ScopeViewModel(
     @Volatile private var argbDenoiser: TemporalDenoiser? = null
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
     private var lastDriverId: String? = null
+    /** Which attached device to try next: skips what can never open, rotates past what just failed. */
+    private val candidates = DeviceCandidates(drivers)
 
     fun start() {
         if (job != null) return
         job = scope.launch(Dispatchers.Default) {
             while (isActive) {
-                val found = findDevice()
+                val found = candidates.next(findCandidates())
                 if (found == null) {
                     _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck()), image = null) }
                 } else {
@@ -180,10 +183,11 @@ class ScopeViewModel(
 
     fun setOutputDir(dir: Path) = _state.update { it.copy(outputDir = dir) }
 
-    private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
-        devices.list().firstNotNullOfOrNull { ref -> drivers.firstOrNull { it.matches(ref.info) }?.let { ref to it } }
+    /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
+    private fun findCandidates(): List<Pair<DeviceRef, DeviceDriver>> = try {
+        candidates.candidates(devices.list())
     } catch (e: UsbException) {
-        null
+        emptyList()
     }
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
@@ -191,9 +195,12 @@ class ScopeViewModel(
         if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
+        var opened = false
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            opened = true
+            candidates.onOpened(ref)
             yuvDenoiser = TemporalDenoiser()
             argbDenoiser = TemporalDenoiser()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
@@ -203,6 +210,8 @@ class ScopeViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: UsbException) {
+            // Only a failure to *open* rotates the cursor; a stream that ended keeps this device first.
+            if (!opened) candidates.onOpenFailed(ref, e)
             val wasStreaming = _state.value.connection is ConnectionState.Streaming
             _state.update {
                 it.copy(

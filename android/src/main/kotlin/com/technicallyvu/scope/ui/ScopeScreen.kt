@@ -27,6 +27,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,8 +48,12 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     val activity = LocalActivity.current
     val wide = if (activity == null) false else calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
 
+    // Remembered, not `vm::toggleTrust`: a method reference is a fresh instance on every
+    // recomposition, and this screen recomposes per frame, which would recompose all of
+    // TrustScreen (license text included) at the frame rate while it is open.
+    val onBack = remember(vm) { { vm.toggleTrust() } }
     if (ui.showTrust) {
-        TrustScreen(onBack = vm::toggleTrust)
+        TrustScreen(onBack = onBack)
         return
     }
 

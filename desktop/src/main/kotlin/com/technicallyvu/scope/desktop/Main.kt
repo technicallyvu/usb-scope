@@ -24,6 +24,9 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.system.exitProcess
 
+/** The desktop build's version. Single source: the window title and the About dialog both read it. */
+const val APP_VERSION = "0.3.0"
+
 /**
  * USB Scope dev bench.
  *   run                                  talk to real hardware via libusb
@@ -65,7 +68,7 @@ fun main(args: Array<String>) {
             }
             Window(
                 onCloseRequest = ::exitApplication,
-                title = "USB Scope (dev bench)" + (replay?.let { "  —  replay: ${it.fileName}" } ?: ""),
+                title = "USB Scope $APP_VERSION (dev bench)" + (replay?.let { "  —  replay: ${it.fileName}" } ?: ""),
                 state = rememberWindowState(width = 900.dp, height = 760.dp),
             ) {
                 MaterialTheme { ScopeScreen(vm) }
