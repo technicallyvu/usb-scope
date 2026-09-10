@@ -82,8 +82,16 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
      * the old session's worker thread.
      */
     private inner class SessionSink(private val token: Long, private val bitmaps: FrameBitmaps) : FrameSink {
+        // Debug-only timing: per-second summary of frame gaps and per-frame processing cost.
+        private var lastFrameNanos = 0L
+        private var windowStartNanos = 0L
+        private var windowFrames = 0
+        private var windowMaxGapMs = 0L
+        private var windowProcessNanos = 0L
+
         override fun onFrame(frame: Frame, state: SessionState) {
             if (token != currentSessionToken) return
+            val t0 = System.nanoTime()
             lastFrame = frame.data
             val bmp = bitmaps.toBitmap(frame.data) ?: return
             val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
@@ -92,6 +100,29 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                 recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
             }
             _ui.update { it.copy(image = shown) }
+            if (BuildConfig.DEBUG) logTiming(t0, state)
+        }
+
+        private fun logTiming(t0: Long, state: SessionState) {
+            val now = System.nanoTime()
+            if (lastFrameNanos != 0L) windowMaxGapMs = maxOf(windowMaxGapMs, (t0 - lastFrameNanos) / 1_000_000)
+            lastFrameNanos = t0
+            windowFrames++
+            windowProcessNanos += now - t0
+            if (windowStartNanos == 0L) windowStartNanos = t0
+            if (now - windowStartNanos >= 1_000_000_000L) {
+                val secs = (now - windowStartNanos) / 1e9
+                android.util.Log.d(
+                    TAG,
+                    String.format(
+                        java.util.Locale.ROOT,
+                        "timing: %.1f fps  maxGap %d ms  avgProcess %.1f ms  partial %d  dropped %d  driverFps %.1f",
+                        windowFrames / secs, windowMaxGapMs, windowProcessNanos / 1e6 / windowFrames,
+                        state.stats.framesPartial, state.stats.framesDropped, state.stats.fps,
+                    ),
+                )
+                windowStartNanos = now; windowFrames = 0; windowMaxGapMs = 0; windowProcessNanos = 0
+            }
         }
 
         override fun onButtonSnapshot() {
