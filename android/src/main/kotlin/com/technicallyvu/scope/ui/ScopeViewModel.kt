@@ -112,10 +112,10 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (windowStartNanos == 0L) windowStartNanos = t0
             if (now - windowStartNanos >= 1_000_000_000L) {
                 val secs = (now - windowStartNanos) / 1e9
-                android.util.Log.d(
+                Log.d(
                     TAG,
                     String.format(
-                        java.util.Locale.ROOT,
+                        Locale.ROOT,
                         "timing: %.1f fps  maxGap %d ms  avgProcess %.1f ms  partial %d  dropped %d  driverFps %.1f",
                         windowFrames / secs, windowMaxGapMs, windowProcessNanos / 1e6 / windowFrames,
                         state.stats.framesPartial, state.stats.framesDropped, state.stats.fps,
@@ -172,7 +172,9 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
 
     fun snapshot() {
-        // Both are published together in onFrame, so they describe the same frame.
+        // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
+        // if a new frame lands between the two reads below; each branch below uses only one of them,
+        // so that possible skew never matters.
         val data = lastFrame ?: return
         val shown = lastImage ?: return
         val s = session.state.value
@@ -224,8 +226,11 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
                     recorder = created
                     pendingVideo = video
+                    // Published while still holding recorderLock so the per-frame state collector
+                    // can never observe recorder != null with recording still false and auto-stop
+                    // the recording that was just started.
+                    session.setRecording(true)
                 }
-                session.setRecording(true)
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
             } finally {
                 recordingTransition = false

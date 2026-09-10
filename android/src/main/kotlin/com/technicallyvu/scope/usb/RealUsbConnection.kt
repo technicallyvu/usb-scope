@@ -6,6 +6,7 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbRequest
+import android.util.Log
 import java.nio.ByteBuffer
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentHashMap
@@ -32,6 +33,9 @@ import kotlin.concurrent.withLock
  *
  * OUT endpoints keep the plain synchronous path: they only carry the useeplus driver's short
  * commands, where latency does not matter and queueing would only add complexity.
+ *
+ * Callers must not close() concurrently with a bulkTransfer; the core frame sources guarantee this
+ * by holding their ioLock across both.
  */
 class RealUsbConnection(private val device: UsbDevice, private val connection: UsbDeviceConnection) : UsbConnection {
     /**
@@ -88,7 +92,8 @@ class RealUsbConnection(private val device: UsbDevice, private val connection: U
 
         /**
          * Copies a completed request's payload into [out] and puts the request straight back on the
-         * endpoint. Returns the number of bytes the device actually sent (the buffer's position).
+         * endpoint. Returns the number of bytes copied into [out] (the buffer's position, clamped to
+         * [wanted]).
          */
         fun consume(req: UsbRequest, out: ByteArray, wanted: Int): Int {
             val buf = buffers.getValue(req)
@@ -98,15 +103,21 @@ class RealUsbConnection(private val device: UsbDevice, private val connection: U
                 buf.get(out, 0, minOf(received, wanted))
             }
             buf.clear()
-            if (!req.queue(buf)) throw IllegalArgumentException("requeue failed")
-            return received
+            if (!req.queue(buf)) {
+                Log.w(TAG, "requeue failed on endpoint %02X; pool depth now %d".format(endpoint.address, buffers.size - 1))
+                throw IllegalArgumentException("requeue failed")
+            }
+            return minOf(received, wanted)
         }
 
         /** Puts a request belonging to this pool back on its endpoint without reading it. */
         fun requeue(req: UsbRequest) {
             val buf = buffers[req] ?: return
             buf.clear()
-            if (!req.queue(buf)) throw IllegalArgumentException("requeue failed")
+            if (!req.queue(buf)) {
+                Log.w(TAG, "requeue failed on endpoint %02X; pool depth now %d".format(endpoint.address, buffers.size - 1))
+                throw IllegalArgumentException("requeue failed")
+            }
         }
 
         /**
@@ -240,6 +251,8 @@ class RealUsbConnection(private val device: UsbDevice, private val connection: U
     }
 
     private companion object {
+        private const val TAG = "RealUsbConnection"
+
         /**
          * Requests kept outstanding per IN endpoint. Eight 16 KB reads is ~128 KB in flight, far more
          * than the ~150 KB/frame stream needs to ride out a scheduling hiccup, at negligible cost.

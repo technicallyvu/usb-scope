@@ -53,10 +53,13 @@ class AndroidUsbTransport(
     override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
         if (detached) throw UsbException("device detached")
         val n = transfer(endpoint, buffer, buffer.size, timeoutMs)
-        if (n >= 0) {
+        if (n > 0) {
             consecutiveTimeouts = 0
             return n
         }
+        // A zero-byte completion is indistinguishable from a timeout with pipelined UsbRequests
+        // (an errored URB also completes with 0 bytes), so it must count toward the liveness limit
+        // the same as -1 or a persistent endpoint fault would spin forever.
         if (detached) throw UsbException("device detached")
         consecutiveTimeouts++
         if (consecutiveTimeouts >= maxConsecutiveTimeouts) {

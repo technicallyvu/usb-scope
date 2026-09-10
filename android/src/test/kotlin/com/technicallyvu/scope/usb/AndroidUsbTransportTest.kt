@@ -39,6 +39,16 @@ class AndroidUsbTransportTest {
     }
 
     @Test
+    fun `a run of empty completions trips the limit like timeouts`() {
+        val c = FakeConnection().apply { bulkResults = ArrayDeque(listOf(0, 0, 0)) }
+        val t = AndroidUsbTransport(c, maxConsecutiveTimeouts = 3)
+        val buf = ByteArray(16)
+        assertEquals(0, t.bulkRead(0x82, buf, 500))
+        assertEquals(0, t.bulkRead(0x82, buf, 500))
+        assertThrows(UsbException::class.java) { t.bulkRead(0x82, buf, 500) }
+    }
+
+    @Test
     fun `data resets the timeout counter`() {
         val c = FakeConnection().apply { bulkResults = ArrayDeque(listOf(-1, -1, 4, -1, -1)) }
         val t = AndroidUsbTransport(c, maxConsecutiveTimeouts = 3)

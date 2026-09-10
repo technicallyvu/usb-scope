@@ -23,7 +23,7 @@ Accepted by Anthony on 2026-09-10 on a Samsung Galaxy Z Fold 7 (Android 16) with
   behind a long-press, and make it obvious that recordings live in the Gallery.
 - **Recording** uses `MediaRecorder` fed through a Surface (H.264 MP4), a deviation from the spec's
   MediaCodec+MediaMuxer wording; same encoder stack, less code.
-- **compileSdk 37** is required by the pinned AndroidX artifacts; targetSdk stays 36.
+- **compileSdk 37** is required by the pinned AndroidX artifacts (Compose BOM 2026.08.00); targetSdk stays 36.
 - **Phone lock.** The screen locking with a PIN interrupted two remote verification rounds; keep the screen
   awake during bench sessions (the app keeps it on only while in the foreground).
 
@@ -37,3 +37,5 @@ Accepted by Anthony on 2026-09-10 on a Samsung Galaxy Z Fold 7 (Android 16) with
 - `openTransports` entries are removed only on detach; `releaseInterface` now clears the alt map but transports
   that close normally stay referenced until the next detach of the same device name.
 - Consider a bitmap ring to cut the two-bitmaps-per-frame allocation on Android.
+- In-app About screen with attribution to the prior reverse-engineering projects and the MIT notice (spec §6; dropped from the Phase 2 plan).
+- Unit coverage for RealUsbConnection's request-pool bookkeeping behind a small seam; FrameBitmaps/MediaStoreSaver/SurfaceRecorder/ScopeViewModel are device-verified only.

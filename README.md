@@ -29,11 +29,11 @@ jmz3/EndoscopeCamera, NinesLastGoal/supercamera_WIN10.
 
 ## Status
 Phase 1 (Windows dev bench) accepted 2026-09-09 against an i4season "su4p-002" (2CE3:3828, firmware 5.0.13).
-Next: Phase 2, native Android app (see docs/superpowers/specs/).
+Next: Phase 3, launch prep (see docs/phase2-notes.md).
 
 ## Android (Phase 2)
     .\gradlew.bat :android:assembleDebug            # builds; fails if any dependency adds the INTERNET permission
-    C:\platform-toolsdb.exe install -r androiduild\outputspk\debugndroid-debug.apk
+    C:\platform-tools\adb.exe install -r android\build\outputs\apk\debug\android-debug.apk
 
 Plug the endoscope into the phone; Android offers to open USB Scope. Photos go to Pictures/USB Scope and clips to
 Movies/USB Scope through MediaStore, so the app requests no permissions at all. Debug builds add a "Replay fixture"
