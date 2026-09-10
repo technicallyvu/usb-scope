@@ -46,28 +46,37 @@ class UvcBulkDriver(
     override val displayName = "UVC camera"
     override val defaultRotation: Int get() = 0
 
-    /** A UVC function is a VideoControl interface plus at least one VideoStreaming interface. */
-    override fun matches(info: UsbDeviceInfo): Boolean {
-        val video = info.interfaces.filter { it.usbClass == UVC_CLASS }
-        return video.any { it.subclass == VC_SUBCLASS } && video.any { it.subclass == VS_SUBCLASS }
-    }
+    /**
+     * A UVC function is identified by its VideoControl interface (class 0x0E, subclass 0x01); spec
+     * §13.1. The VideoStreaming interfaces are enumerated from the configuration descriptor rather
+     * than from this summary, which on some platforms lists only the active configuration's
+     * interfaces -- so a device that really has no streaming interface is reported by [open], with
+     * a message, instead of silently failing to match here.
+     */
+    override fun matches(info: UsbDeviceInfo): Boolean =
+        info.interfaces.any { it.usbClass == UVC_CLASS && it.subclass == VC_SUBCLASS }
 
     override fun withPacketSink(sink: PacketSink): DeviceDriver =
         UvcBulkDriver(clock, sleep, ioDispatcher, sink)
 
     override fun open(transport: UsbTransport): FrameSource {
         var lastError: UsbException? = null
-        repeat(OPEN_ATTEMPTS) {
+        for (attempt in 1..OPEN_ATTEMPTS) {
+            val claimed = mutableListOf<Int>()
             try {
-                val setup = handshake(transport)
+                val setup = handshake(transport, claimed)
                 return UvcFrameSource(transport, setup, clock, ioDispatcher, packetSink)
             } catch (e: UvcUnsupportedException) {
                 throw e // permanent: retrying cannot change the descriptors
             } catch (e: UsbException) {
                 lastError = e
+                // Best effort: a half-finished handshake may hold one or both interfaces, and the
+                // next attempt's claim would then fail for a reason of our own making.
+                claimed.asReversed().forEach { runCatching { transport.releaseInterface(it) } }
                 // No device reset here: on libusb resetDevice() invalidates the handle we are about to
                 // retry with, and Android has no reset at all. A plain wait is portable and sufficient.
-                sleep(RETRY_WAIT_MS)
+                // Nothing waits after the final attempt -- the caller is about to see the failure.
+                if (attempt < OPEN_ATTEMPTS) sleep(RETRY_WAIT_MS)
             }
         }
         throw UsbException("UVC handshake failed after $OPEN_ATTEMPTS attempts", cause = lastError)
@@ -83,9 +92,16 @@ class UvcBulkDriver(
         val width: Int,
         val height: Int,
         val maxPayloadSize: Int,
+        /** Negotiated `dwMaxVideoFrameSize`, else the frame descriptor's; 0 when neither declares one. */
+        val maxFrameBufferSize: Int,
     )
 
-    internal fun handshake(t: UsbTransport): Setup {
+    /**
+     * Reads the descriptors, claims the interfaces and negotiates a format. Each interface number is
+     * appended to [claimed] *before* it is claimed, so a caller can release on failure without
+     * having to guess how far this got (a claim can fail after the device already took it).
+     */
+    internal fun handshake(t: UsbTransport, claimed: MutableList<Int> = mutableListOf()): Setup {
         val config = t.readConfigDescriptor()
         val device = UvcDescriptors.parse(config) ?: throw UvcUnsupportedException("not a UVC device")
         val vs = device.streaming.firstOrNull()
@@ -110,7 +126,9 @@ class UvcBulkDriver(
             ?: format.frames.firstOrNull()
             ?: throw UvcUnsupportedException("this camera's format declares no frame sizes")
 
+        claimed += device.controlInterface
         t.claimInterface(device.controlInterface)
+        claimed += vs.number
         t.claimInterface(vs.number)
 
         val negotiated = UvcProbe.negotiate(
@@ -140,6 +158,9 @@ class UvcBulkDriver(
             width = frame.width,
             height = frame.height,
             maxPayloadSize = negotiated.maxPayloadTransferSize.takeIf { it > 0 } ?: DEFAULT_MAX_PAYLOAD,
+            // What the device committed to, else what the frame descriptor declared; the parser
+            // turns this into the ceiling that stops a wedged stream from eating the heap.
+            maxFrameBufferSize = negotiated.maxVideoFrameSize.takeIf { it > 0 } ?: frame.maxFrameBufferSize,
         )
     }
 
@@ -148,7 +169,7 @@ class UvcBulkDriver(
         const val VC_SUBCLASS = 0x01
         const val VS_SUBCLASS = 0x02
         const val CHUNK_SIZE = 16384
-        /** Short on purpose: a timeout costs nothing (n == 0 -> continue) and lets the loop notice close/cancel. */
+        /** Short on purpose: a timeout costs almost nothing (n == 0 ends any payload in progress) and lets the loop notice close/cancel. */
         const val READ_TIMEOUT_MS = 500
         /** Used when the device commits a `dwMaxPayloadTransferSize` of 0, which some firmware does. */
         const val DEFAULT_MAX_PAYLOAD = 16384
@@ -179,7 +200,13 @@ class UvcFrameSource internal constructor(
     // As in the other drivers, the blocking read is offloaded per-call with withContext rather than
     // flowOn: flowOn's buffer would let this loop race ahead of a downstream take(n)'s cancellation.
     override val frames: Flow<Frame> = flow {
-        val parser = UvcPayloadParser(setup.kind, setup.width, setup.height, setup.maxPayloadSize)
+        val parser = UvcPayloadParser(
+            setup.kind,
+            setup.width,
+            setup.height,
+            setup.maxPayloadSize,
+            setup.maxFrameBufferSize,
+        )
         val fps = FpsMeter()
         val buf = ByteArray(UvcBulkDriver.CHUNK_SIZE)
         while (!closed) {
@@ -189,9 +216,10 @@ class UvcFrameSource internal constructor(
                     else transport.bulkRead(setup.endpoint, buf, UvcBulkDriver.READ_TIMEOUT_MS)
                 }
             }
-            if (n == 0) continue
             val now = clock()
-            packetSink?.onPacket(buf, n, now)
+            // n == 0 (a zero-length packet, or a read timeout) is handed to the parser too: mid
+            // payload it ends that payload, and with nothing in progress the parser ignores it.
+            if (n > 0) packetSink?.onPacket(buf, n, now)
             for (frame in parser.accept(buf, n, buf.size, now)) {
                 _stats.value = StreamStats(
                     fps = fps.tick(now),

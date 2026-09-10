@@ -67,6 +67,32 @@ class UvcDescriptorsTest {
         assertEquals(1024, ep.maxPacketSize)
     }
 
+    /**
+     * The GUID bytes are typed out here rather than taken from the production constant, so that the
+     * test would still fail if that constant were byte-swapped again. Wire order for
+     * `{32595559-0000-0010-8000-00AA00389B71}`: `Data1` little-endian, i.e. ASCII "YUY2" first.
+     */
+    @Test
+    fun `the wire-order YUY2 guid is recognised`() {
+        val guid = byteArrayOf(
+            0x59, 0x55, 0x59, 0x32, 0x00, 0x00, 0x10, 0x00,
+            0x80.toByte(), 0x00, 0x00, 0xAA.toByte(), 0x00, 0x38, 0x9B.toByte(), 0x71,
+        )
+        val device = requireNotNull(UvcDescriptors.parse(UvcTestDescriptors.build(uncompressedGuid = guid)))
+        assertEquals(UvcFormatKind.YUY2, device.streaming[0].formats[1].kind)
+    }
+
+    @Test
+    fun `a guid with Data1 in text order is not YUY2`() {
+        // The pre-fix constant: the textual GUID's first group written big-endian.
+        val wrong = byteArrayOf(
+            0x32, 0x59, 0x55, 0x59, 0x00, 0x00, 0x10, 0x00,
+            0x80.toByte(), 0x00, 0x00, 0xAA.toByte(), 0x00, 0x38, 0x9B.toByte(), 0x71,
+        )
+        val device = requireNotNull(UvcDescriptors.parse(UvcTestDescriptors.build(uncompressedGuid = wrong)))
+        assertEquals(UvcFormatKind.OTHER, device.streaming[0].formats[1].kind)
+    }
+
     @Test
     fun `config without a video control interface yields null`() {
         assertNull(UvcDescriptors.parse(UvcTestDescriptors.withoutVc()))

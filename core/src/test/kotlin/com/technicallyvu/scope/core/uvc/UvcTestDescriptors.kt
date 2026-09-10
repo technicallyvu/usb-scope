@@ -49,13 +49,23 @@ private fun MutableList<Byte>.le32(v: Int) {
  */
 object UvcTestDescriptors {
 
-    /** UVC FORMAT_UNCOMPRESSED guidFormat for YUY2 (spec 1.1, Global Constraints). */
-    private val YUY2_GUID = byteArrayOf(
-        0x32, 0x59, 0x55, 0x59, 0x00, 0x00, 0x10, 0x00,
+    /**
+     * UVC FORMAT_UNCOMPRESSED `guidFormat` for YUY2 in wire order: `{32595559-...}` serialises
+     * `Data1` little-endian, so the blob starts with ASCII "YUY2".
+     */
+    val YUY2_GUID = byteArrayOf(
+        0x59, 0x55, 0x59, 0x32, 0x00, 0x00, 0x10, 0x00,
         0x80.toByte(), 0x00, 0x00, 0xAA.toByte(), 0x00, 0x38, 0x9B.toByte(), 0x71,
     )
 
-    fun build(bulk: Boolean = true, bcdUvc: Int = 0x0110, includeYuy2: Boolean = true): ByteArray {
+    fun build(
+        bulk: Boolean = true,
+        bcdUvc: Int = 0x0110,
+        includeYuy2: Boolean = true,
+        /** The 16 `guidFormat` bytes to emit, so a test can hand in a literal blob of its own. */
+        uncompressedGuid: ByteArray = YUY2_GUID,
+    ): ByteArray {
+        require(uncompressedGuid.size == 16) { "guidFormat must be 16 bytes" }
         val out = mutableListOf<Byte>()
 
         // Configuration descriptor (9) -- wTotalLength patched once the full length is known.
@@ -106,7 +116,7 @@ object UvcTestDescriptors {
         if (includeYuy2) {
             // FORMAT_UNCOMPRESSED / YUY2 (27): index 2, default frame 1
             out.raw(0x1B, 0x24, 0x04, 0x02, 0x01)
-            out.raw(YUY2_GUID)
+            out.raw(uncompressedGuid)
             out.raw(0x10, 0x01, 0x00, 0x00, 0x00, 0x00)
 
             // FRAME_UNCOMPRESSED 320x240 (30)

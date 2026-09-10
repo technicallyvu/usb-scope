@@ -50,13 +50,17 @@ class UvcBulkDriverTest {
     }
 
     @Test
-    fun `matches a video class layout and nothing else`() {
+    fun `matches a VideoControl interface and nothing else`() {
         val d = driver()
         val vc = UsbInterfaceInfo(0, 0x0E, 0x01, 0)
         val vs = UsbInterfaceInfo(1, 0x0E, 0x02, 0)
         assertTrue(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF, listOf(vc, vs))))
+        // VideoControl alone is enough: the streaming interfaces come from the configuration
+        // descriptor, which this summary does not always reflect. open() reports a device that
+        // genuinely has none.
+        assertTrue(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF, listOf(vc))))
         assertFalse(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF, listOf(vs))))
-        assertFalse(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF, listOf(vc))))
+        assertFalse(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF, listOf(UsbInterfaceInfo(0, 0x03, 0x01, 1)))))
         assertFalse(d.matches(UsbDeviceInfo(0x046D, 0x0825, 0xEF)))
         assertEquals("uvc-bulk", d.id)
         assertEquals(0, d.defaultRotation)
@@ -124,12 +128,26 @@ class UvcBulkDriverTest {
     }
 
     @Test
-    fun `open retries a transient failure without a device reset`() {
+    fun `open retries a transient failure without a device reset, releasing between attempts`() {
         val t = transport().apply { failuresBeforeSuccess = 3 }
         assertThrows(UsbException::class.java) { driver().open(t) }
         assertEquals(0, t.resets)
         assertEquals(3, t.calls.count { it == "claim 0" })
-        assertEquals(listOf(1500L, 1500L, 1500L), slept)
+        // Whatever a failed attempt may have claimed is handed back before the next one tries.
+        assertEquals(
+            listOf("claim 0", "release 0", "claim 0", "release 0", "claim 0", "release 0"),
+            t.calls.filter { it.startsWith("claim ") || it.startsWith("release ") },
+        )
+        // Two waits, not three: nothing is gained by sleeping after the last attempt.
+        assertEquals(listOf(1500L, 1500L), slept)
+    }
+
+    @Test
+    fun `a successful open claims without releasing`() {
+        val t = transport()
+        driver().open(t)
+        assertTrue(t.calls.none { it.startsWith("release ") }, "calls=${t.calls}")
+        assertTrue(slept.isEmpty())
     }
 
     @Test

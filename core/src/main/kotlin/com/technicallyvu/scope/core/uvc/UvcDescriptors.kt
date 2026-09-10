@@ -75,8 +75,14 @@ object UvcDescriptors {
     private const val VS_FORMAT_MJPEG = 0x06
     private const val VS_FRAME_MJPEG = 0x07
 
+    /**
+     * `guidFormat` for YUY2 as it appears **on the wire**. The GUID
+     * `{32595559-0000-0010-8000-00AA00389B71}` is serialised with its `Data1`/`Data2`/`Data3`
+     * fields little-endian, so the first four bytes read as ASCII "YUY2" (`59 55 59 32`) rather
+     * than as the textual GUID's first group.
+     */
     private val YUY2_GUID = byteArrayOf(
-        0x32, 0x59, 0x55, 0x59, 0x00, 0x00, 0x10, 0x00,
+        0x59, 0x55, 0x59, 0x32, 0x00, 0x00, 0x10, 0x00,
         0x80.toByte(), 0x00, 0x00, 0xAA.toByte(), 0x00, 0x38, 0x9B.toByte(), 0x71,
     )
 
