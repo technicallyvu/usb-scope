@@ -2,8 +2,10 @@ package com.technicallyvu.scope.core.session
 
 import com.technicallyvu.scope.core.driver.DeviceDriver
 import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
@@ -36,6 +38,7 @@ data class SessionState(
     val stats: StreamStats = StreamStats(),
     val recording: Boolean = false,
     val lastSaved: String? = null,
+    val denoise: Boolean = true,
 )
 
 /**
@@ -67,6 +70,7 @@ class ScopeSession(
     val state: StateFlow<SessionState> = _state
 
     @Volatile private var job: Job? = null
+    @Volatile private var denoiser: TemporalDenoiser? = TemporalDenoiser()
     // The following are only ever read/written from the session coroutine (started in `start()`,
     // confined to `workDispatcher`), so they need no synchronization of their own.
     private var lastDriverId: String? = null
@@ -123,6 +127,11 @@ class ScopeSession(
     fun setRecording(active: Boolean) = _state.update { it.copy(recording = active) }
     fun markSaved(name: String) = _state.update { it.copy(lastSaved = name) }
 
+    fun setDenoise(enabled: Boolean) {
+        denoiser = if (enabled) TemporalDenoiser() else null
+        _state.update { it.copy(denoise = enabled) }
+    }
+
     private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
         devices.list().firstNotNullOfOrNull { ref -> drivers.firstOrNull { it.matches(ref.info) }?.let { ref to it } }
     } catch (e: UsbException) {
@@ -140,6 +149,7 @@ class ScopeSession(
             // so a device that keeps failing to open does not wipe the user's rotation every poll.
             if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
             lastDriverId = driver.id
+            denoiser?.reset()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             val src = source
             src.frames.collect { frame -> onFrame(frame, src.stats.value) }
@@ -162,9 +172,14 @@ class ScopeSession(
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
         _state.update { it.copy(stats = stats) }
+        val delivered = denoiser?.let { d ->
+            (frame.data as? FrameData.Yuyv422)?.let { yuv ->
+                Frame(d.apply(yuv), frame.timestampNanos, frame.buttonPressed, frame.cameraNumber, frame.sensorValue)
+            }
+        } ?: frame
         // Only Exception is swallowed (never Error, never cancellation): the shell owns its own error reporting.
         try {
-            sink.onFrame(frame, _state.value)
+            sink.onFrame(delivered, _state.value)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

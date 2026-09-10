@@ -228,6 +228,16 @@ class ScopeViewModelTest {
     }
 
     @Test
+    fun `toggleDenoise flips the flag`(@TempDir dir: Path) = runBlocking {
+        val vm = vm(FakeDevices(emptyList()) { error("unused") }, dir)
+        assertTrue(vm.state.value.denoise)
+        vm.toggleDenoise()
+        assertTrue(!vm.state.value.denoise)
+        vm.toggleDenoise()
+        assertTrue(vm.state.value.denoise)
+    }
+
+    @Test
     fun `a stop during encoder start-up discards the new recorder`(@TempDir dir: Path) = runBlocking {
         val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
         val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }

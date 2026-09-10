@@ -5,6 +5,7 @@ import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
@@ -49,6 +50,7 @@ data class UiState(
     val recording: Boolean = false,
     val showDebug: Boolean = false,
     val lastSaved: String? = null,
+    val denoise: Boolean = true,
 )
 
 /**
@@ -78,6 +80,8 @@ class ScopeViewModel(
     private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
+    @Volatile private var yuvDenoiser: TemporalDenoiser? = null
+    @Volatile private var argbDenoiser: TemporalDenoiser? = null
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
     private var lastDriverId: String? = null
 
@@ -162,6 +166,8 @@ class ScopeViewModel(
 
     fun toggleDebug() = _state.update { it.copy(showDebug = !it.showDebug) }
 
+    fun toggleDenoise() = _state.update { it.copy(denoise = !it.denoise) }
+
     fun setOutputDir(dir: Path) = _state.update { it.copy(outputDir = dir) }
 
     private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
@@ -178,6 +184,8 @@ class ScopeViewModel(
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            yuvDenoiser = TemporalDenoiser()
+            argbDenoiser = TemporalDenoiser()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             lastDriverId = driver.id
             val src = source
@@ -210,8 +218,8 @@ class ScopeViewModel(
     }
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
-        val decoded = ImageTransforms.decode(frame.data) ?: return
         val s = _state.value
+        val decoded = ImageTransforms.decode(frame.data, if (s.denoise) yuvDenoiser else null, if (s.denoise) argbDenoiser else null) ?: return
         val shown = ImageTransforms.apply(decoded, s.rotation, s.mirror)
         lastFrame = frame.data
         lastImage = shown

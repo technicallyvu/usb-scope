@@ -246,4 +246,17 @@ class ScopeSessionTest {
         kotlinx.coroutines.delay(500)
         assertEquals(1, opens.get(), "start() after a timed-out stopAndJoin must not launch a second loop")
     }
+
+    @Test
+    fun `denoise replaces YUV frame data and can be toggled`() = runBlocking<Unit> {
+        val sink = CountingSink()
+        val devices = FakeDevices(listOf(ref)) { stream(6, loop = true) }
+        val s = session(devices, sink)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertTrue(s.state.value.denoise)
+        s.setDenoise(false)
+        withTimeout(2_000) { s.state.first { !it.denoise } }
+        s.stop()
+    }
 }

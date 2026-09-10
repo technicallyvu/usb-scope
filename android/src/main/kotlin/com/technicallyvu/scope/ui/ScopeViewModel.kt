@@ -14,6 +14,7 @@ import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.fixture.ReplayDeviceSource
 import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
 import com.technicallyvu.scope.core.image.ExifOrientation
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.session.ConnectionState
 import com.technicallyvu.scope.core.session.FrameSink
 import com.technicallyvu.scope.core.session.ScopeSession
@@ -88,12 +89,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         private var windowFrames = 0
         private var windowMaxGapMs = 0L
         private var windowProcessNanos = 0L
+        private val argbDenoiser = TemporalDenoiser()
 
         override fun onFrame(frame: Frame, state: SessionState) {
             if (token != currentSessionToken) return
             val t0 = System.nanoTime()
             lastFrame = frame.data
-            val bmp = bitmaps.toBitmap(frame.data) ?: return
+            val denoiser = if (state.denoise && frame.data is FrameData.Jpeg) argbDenoiser else null
+            val bmp = bitmaps.toBitmap(frame.data, denoiser) ?: return
             val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
             lastImage = shown
             synchronized(recorderLock) {
@@ -170,6 +173,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun rotate() = session.rotate()
     fun toggleMirror() = session.toggleMirror()
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
+    fun toggleDenoise() = session.setDenoise(!session.state.value.denoise)
 
     fun snapshot() {
         // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
