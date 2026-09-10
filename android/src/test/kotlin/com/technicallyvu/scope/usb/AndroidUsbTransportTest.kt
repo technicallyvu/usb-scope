@@ -11,6 +11,8 @@ class AndroidUsbTransportTest {
         val calls = mutableListOf<String>()
         var bulkResults = ArrayDeque<Int>()
         var controlReply: ByteArray? = null
+        var raw: ByteArray? = null
+        override fun rawDescriptors(): ByteArray? = raw.also { calls += "raw" }
         override fun claimInterface(number: Int) = true.also { calls += "claim $number" }
         override fun releaseInterface(number: Int) = true.also { calls += "release $number" }
         override fun setInterface(number: Int, alt: Int) = true.also { calls += "alt $number $alt" }
@@ -94,6 +96,31 @@ class AndroidUsbTransportTest {
         val t = AndroidUsbTransport(c)
         assertThrows(UsbException::class.java) { t.bulkRead(0x83, ByteArray(16), 500) }
         assertThrows(UsbException::class.java) { t.bulkWrite(0x03, ByteArray(4), 500) }
+    }
+
+    @Test
+    fun `readConfigDescriptor slices the configuration out of the cached raw descriptors`() {
+        // Android hands back the device descriptor (18 bytes, type 1) followed by the configuration.
+        val config = byteArrayOf(0x09, 0x02, 0x0C, 0x00, 0x01, 0x01, 0x00, 0x80.toByte(), 0x32) +
+            byteArrayOf(0x03, 0x0B, 0x00)
+        val device = ByteArray(18).also { it[0] = 18; it[1] = 1 }
+        val c = FakeConnection().apply { raw = device + config }
+
+        assertArrayEquals(config, AndroidUsbTransport(c).readConfigDescriptor())
+        // No control traffic: the descriptors were already cached by the platform.
+        assertEquals(listOf("raw"), c.calls)
+    }
+
+    @Test
+    fun `readConfigDescriptor falls back to control transfers when no raw descriptors are available`() {
+        val config = byteArrayOf(0x09, 0x02, 0x09, 0x00, 0x01, 0x01, 0x00, 0x80.toByte(), 0x32)
+        val c = FakeConnection().apply { raw = null; controlReply = config }
+
+        assertArrayEquals(config, AndroidUsbTransport(c).readConfigDescriptor())
+        assertEquals(
+            listOf("raw", "ctrl 80 06 0200 0000 9", "ctrl 80 06 0200 0000 9"),
+            c.calls,
+        )
     }
 
     @Test

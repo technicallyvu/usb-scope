@@ -241,6 +241,8 @@ class RealUsbConnection(private val device: UsbDevice, private val connection: U
     override fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, buffer: ByteArray?, length: Int, timeoutMs: Int): Int =
         connection.controlTransfer(requestType, request, value, index, buffer, length, timeoutMs)
 
+    override fun rawDescriptors(): ByteArray? = connection.rawDescriptors
+
     override fun close() {
         poolLock.withLock {
             closed = true
