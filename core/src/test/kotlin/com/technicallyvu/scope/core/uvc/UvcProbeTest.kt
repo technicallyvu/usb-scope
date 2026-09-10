@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.core.uvc
 
 import com.technicallyvu.scope.core.fixture.ReplayTransport
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
@@ -49,10 +50,15 @@ class UvcProbeTest {
     }
 
     @Test
-    fun `negotiate is probe SET_CUR, probe GET_CUR, commit SET_CUR and returns the device's values`() {
+    fun `negotiate is probe SET_CUR, probe GET_CUR, commit SET_CUR and commits the reply verbatim`() {
         val t = ReplayTransport(emptyList())
         val fromDevice = UvcProbeControl(1, 1, 333_333, 614_400, 16_384)
-        t.controlResponses[0xA1 to 0x81] = UvcProbe.encode(fromDevice, 34)
+        val reply = UvcProbe.encode(fromDevice, 34)
+        // A field past dwMaxPayloadTransferSize that decode() does not model (bmFramingInfo and the
+        // rest of the 1.1 tail). Re-encoding the decoded struct would commit a zero here.
+        reply[30] = 0x5A
+
+        t.controlResponses[0xA1 to 0x81] = reply
 
         val negotiated = UvcProbe.negotiate(
             t,
@@ -70,6 +76,29 @@ class UvcProbeTest {
             ),
             t.calls,
         )
+        assertArrayEquals(reply, t.lastControlOut, "the commit must be the device's own reply bytes")
+    }
+
+    @Test
+    fun `a reply shorter than the struct is committed padded, not re-encoded`() {
+        val t = ReplayTransport(emptyList())
+        val fromDevice = UvcProbeControl(2, 3, 333_333, 614_400, 8_192)
+        val reply = UvcProbe.encode(fromDevice, 26)   // a 1.0-length answer to a 1.1-length request
+        reply[12] = 0x77                              // wCompQuality: unmodelled, inside what was returned
+        t.controlResponses[0xA1 to 0x81] = reply
+
+        val negotiated = UvcProbe.negotiate(
+            t,
+            vsInterface = 1,
+            bcdUvc = 0x0110,
+            request = UvcProbeControl(1, 1, 333_333, 614_400, 0),
+        )
+
+        assertEquals(fromDevice, negotiated)
+        val commit = requireNotNull(t.lastControlOut)
+        assertEquals(34, commit.size, "the commit keeps the struct length the device's version implies")
+        assertArrayEquals(reply, commit.copyOf(26), "the returned bytes survive unchanged")
+        for (i in 26 until 34) assertEquals(0, commit[i].toInt(), "byte $i past the reply must be zero padding")
     }
 
     @Test
@@ -79,5 +108,7 @@ class UvcProbeTest {
         assertEquals(request, UvcProbe.negotiate(t, vsInterface = 1, bcdUvc = 0x0100, request = request))
         assertEquals(3, t.calls.size)
         assertEquals("ctrl 21 01 0200 0001 26", t.calls.last())
+        // Nothing usable came back, so our own request is what gets committed.
+        assertArrayEquals(UvcProbe.encode(request, 26), t.lastControlOut)
     }
 }

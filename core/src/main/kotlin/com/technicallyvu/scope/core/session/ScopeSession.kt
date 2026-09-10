@@ -60,9 +60,11 @@ interface FrameSink {
 }
 
 /**
- * Platform-free session loop shared by shells: polls [devices], opens the first device a driver
- * claims, streams frames to [sink], and reconnects after errors. Owns rotation/mirror and the
- * recording flag (which locks them); the shell owns snapshot/recording implementations.
+ * Platform-free session loop shared by shells: polls [devices], opens a device some driver claims,
+ * streams frames to [sink], and reconnects after errors. Which device is tried on a given poll is
+ * [DeviceCandidates]' business — one that cannot work is skipped, one that failed is rotated past.
+ * Owns rotation/mirror and the recording flag (which locks them); the shell owns snapshot/recording
+ * implementations.
  */
 class ScopeSession(
     private val devices: DeviceSource,
@@ -83,13 +85,14 @@ class ScopeSession(
     private var lastDriverId: String? = null
     private var prevButton = false
     private var lastButtonNanos: Long? = null
+    private val candidates = DeviceCandidates(drivers)
 
     fun start() {
         if (job != null) return
         job = scope.launch(workDispatcher) {
             while (isActive) {
                 try {
-                    val found = findDevice()
+                    val found = candidates.next(findCandidates())
                     if (found == null) {
                         _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck())) }
                     } else {
@@ -139,19 +142,23 @@ class ScopeSession(
         _state.update { it.copy(denoise = enabled) }
     }
 
-    private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
-        devices.list().firstNotNullOfOrNull { ref -> drivers.firstOrNull { it.matches(ref.info) }?.let { ref to it } }
+    /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
+    private fun findCandidates(): List<Pair<DeviceRef, DeviceDriver>> = try {
+        candidates.candidates(devices.list())
     } catch (e: UsbException) {
-        null
+        emptyList()
     }
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
+        var opened = false
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            opened = true
+            candidates.onOpened(ref)
             // Only reset rotation/mirror to the driver default once the device has actually opened,
             // so a device that keeps failing to open does not wipe the user's rotation every poll.
             if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
@@ -171,6 +178,8 @@ class ScopeSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: UsbException) {
+            // Only a failure to *open* rotates the cursor; a stream that ended keeps this device first.
+            if (!opened) candidates.onOpenFailed(ref, e)
             val wasStreaming = _state.value.connection is ConnectionState.Streaming
             _state.update {
                 it.copy(connection = if (wasStreaming) ConnectionState.NoDevice(false) else if (driverHintCheck()) ConnectionState.NoDevice(true) else ConnectionState.Failed(e.message ?: "USB error"))

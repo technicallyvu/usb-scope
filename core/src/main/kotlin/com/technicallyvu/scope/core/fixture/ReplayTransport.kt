@@ -21,6 +21,13 @@ class ReplayTransport(
     /** Canned replies for device-to-host control requests, keyed by (requestType, request). */
     val controlResponses = mutableMapOf<Pair<Int, Int>, ByteArray>()
 
+    /**
+     * A copy of the payload of the most recent host-to-device control transfer. [calls] records only
+     * lengths, which is not enough to assert what was actually sent (a probe/commit struct, say).
+     */
+    var lastControlOut: ByteArray? = null
+        private set
+
     /** Number of times [claimInterface] should throw before succeeding (retry tests). */
     var failuresBeforeSuccess = 0
     var resets = 0
@@ -65,7 +72,10 @@ class ReplayTransport(
 
     override fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, data: ByteArray, timeoutMs: Int): Int {
         calls += "ctrl %02X %02X %04X %04X %d".format(requestType and 0xFF, request and 0xFF, value and 0xFFFF, index and 0xFFFF, data.size)
-        if (requestType and 0x80 == 0) return data.size
+        if (requestType and 0x80 == 0) {
+            lastControlOut = data.copyOf()
+            return data.size
+        }
         val reply = controlResponses[(requestType and 0xFF) to (request and 0xFF)] ?: return 0
         val n = minOf(reply.size, data.size)
         reply.copyInto(data, 0, 0, n)

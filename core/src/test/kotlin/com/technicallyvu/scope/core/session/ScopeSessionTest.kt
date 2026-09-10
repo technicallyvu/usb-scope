@@ -12,6 +12,7 @@ import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.core.usb.UsbTransport
+import com.technicallyvu.scope.core.uvc.UvcUnsupportedException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -53,6 +55,20 @@ class ScopeSessionTest {
             return refs
         }
         override fun open(ref: DeviceRef) = opener()
+    }
+
+    /**
+     * [DeviceSource] that opens each [DeviceRef] differently and counts the opens per ref, so a test
+     * can make one device refuse to open and check that the session moves on to the next one.
+     */
+    private class PerRefDevices(private val refs: List<DeviceRef>, private val opener: (DeviceRef) -> UsbTransport) : DeviceSource {
+        private val counts = ConcurrentHashMap<DeviceRef, AtomicInteger>()
+        override fun list() = refs
+        override fun open(ref: DeviceRef): UsbTransport {
+            counts.computeIfAbsent(ref) { AtomicInteger() }.incrementAndGet()
+            return opener(ref)
+        }
+        fun opens(ref: DeviceRef): Int = counts[ref]?.get() ?: 0
     }
 
     /** Delegates every call to [delegate] except [bulkRead], which throws once [endNow] is set. */
@@ -231,6 +247,47 @@ class ScopeSessionTest {
         devices.opener = { stream(6, loop = true) }
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
         assertEquals(chosen, s.state.value.rotation, "reconnecting must not reset the user's rotation")
+        s.stop()
+    }
+
+    @Test
+    fun `a device that can never open is skipped for good and the next one streams`(): Unit = runBlocking {
+        // The realistic case: UvcBulkDriver matches any UVC function, so the first device enumerated
+        // can be a webcam whose descriptors it cannot drive. That must not shadow the endoscope.
+        val unopenable = DeviceRef(yuvInfo, 0, 1)
+        val scope = DeviceRef(yuvInfo, 0, 2)
+        val devices = PerRefDevices(listOf(unopenable, scope)) { r ->
+            if (r == unopenable) throw UvcUnsupportedException("this camera has no bulk streaming endpoint")
+            stream(6, loop = true)
+        }
+        val s = session(devices, CountingSink())
+        s.start()
+        // Two polls: one to learn the first device is hopeless, one to open the second.
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(1, devices.opens(unopenable), "the unsupported device should have been tried exactly once")
+        assertTrue(devices.opens(scope) >= 1, "the second device should have been opened")
+
+        kotlinx.coroutines.delay(300)   // several more poll intervals
+        assertEquals(1, devices.opens(unopenable), "a permanently unsupported device must never be opened again")
+        assertTrue(s.state.value.connection is ConnectionState.Streaming)
+        s.stop()
+    }
+
+    @Test
+    fun `a device that always fails to open does not block the next candidate`(): Unit = runBlocking {
+        // A plain UsbException is not permanent (no permission yet, a busy handle), so this device
+        // keeps its place in the rotation -- but the poll after each failure tries the next one.
+        val flaky = DeviceRef(yuvInfo, 0, 1)
+        val scope = DeviceRef(yuvInfo, 0, 2)
+        val devices = PerRefDevices(listOf(flaky, scope)) { r ->
+            if (r == flaky) throw UsbException("no permission")
+            stream(6, loop = true)
+        }
+        val s = session(devices, CountingSink())
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertTrue(devices.opens(flaky) >= 1, "the first device should still have been tried")
+        assertTrue(devices.opens(scope) >= 1, "the second device should have been opened")
         s.stop()
     }
 

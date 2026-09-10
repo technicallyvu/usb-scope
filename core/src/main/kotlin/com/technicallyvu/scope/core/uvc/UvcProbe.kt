@@ -46,6 +46,9 @@ object UvcProbe {
     /** `bmHint` bit 0: dwFrameInterval is fixed, the device may vary the other fields. */
     private const val HINT_FRAME_INTERVAL = 0x0001
 
+    /** The mandatory minimum struct length (UVC 1.0); a shorter GET_CUR reply is not usable. */
+    const val MIN_LENGTH = 26
+
     /** Struct length for a `bcdUVC`: 26 bytes for 1.0, 34 for 1.1/1.2, 48 for 1.5 and later. */
     fun lengthFor(bcdUvc: Int): Int = when {
         bcdUvc < 0x0110 -> 26
@@ -89,8 +92,14 @@ object UvcProbe {
      * SET_CUR probe -> GET_CUR probe -> SET_CUR commit, all on [vsInterface]. Returns the control the
      * device agreed to, which is what the caller must use for buffer sizes.
      *
-     * A device that answers the GET_CUR with fewer bytes than the mandatory 26 has told us nothing
-     * usable, so [request] is committed unchanged rather than a struct of zeros.
+     * The commit sends the device's own GET_CUR bytes back, not a re-encoding of the five fields
+     * [decode] models. Most of the struct is unmodelled — `bmFramingInfo`, `bPreferedVersion`,
+     * `bmHint` as the device revised it, and everything past byte 26 in a 1.1+ struct — and a device
+     * that answered with those set is entitled to get them back. Re-encoding would commit zeros
+     * there, which some firmware reads as "no framing info" and then refuses to stream.
+     *
+     * A device that answers the GET_CUR with fewer bytes than the mandatory [MIN_LENGTH] has told us
+     * nothing usable, so [request] is encoded and committed rather than a struct of zeros.
      */
     fun negotiate(t: UsbTransport, vsInterface: Int, bcdUvc: Int, request: UvcProbeControl): UvcProbeControl {
         val length = lengthFor(bcdUvc)
@@ -98,9 +107,14 @@ object UvcProbe {
 
         val reply = ByteArray(length)
         val n = t.controlTransfer(REQTYPE_IN, GET_CUR, VS_PROBE_CONTROL, vsInterface, reply, TIMEOUT_MS)
-        val negotiated = if (n >= 26) decode(reply, n) else request
+        val received = n.coerceIn(0, reply.size)
+        val usable = received >= MIN_LENGTH
+        val negotiated = if (usable) decode(reply, received) else request
+        // Truncated to what the device actually returned, then zero-padded back to the struct length
+        // the device expects: a short-but-valid reply must not carry stale tail bytes into the commit.
+        val commit = if (usable) reply.copyOf(received).copyOf(length) else encode(request, length)
 
-        t.controlTransfer(REQTYPE_OUT, SET_CUR, VS_COMMIT_CONTROL, vsInterface, encode(negotiated, length), TIMEOUT_MS)
+        t.controlTransfer(REQTYPE_OUT, SET_CUR, VS_COMMIT_CONTROL, vsInterface, commit, TIMEOUT_MS)
         return negotiated
     }
 

@@ -9,6 +9,7 @@ import com.technicallyvu.scope.core.jpegBytes
 import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
+import com.technicallyvu.scope.core.usb.UsbTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -37,6 +38,15 @@ class UvcBulkDriverTest {
             LoggedPacket(i.toLong(), out)
         }
         return packets to jpegs
+    }
+
+    /** Records the capacity of every bulk read buffer, so a test can check the reads are payload-sized. */
+    private class SizingTransport(private val inner: ReplayTransport) : UsbTransport by inner {
+        val readSizes = mutableListOf<Int>()
+        override fun bulkRead(endpoint: Int, buffer: ByteArray, timeoutMs: Int): Int {
+            synchronized(readSizes) { readSizes += buffer.size }
+            return inner.bulkRead(endpoint, buffer, timeoutMs)
+        }
     }
 
     private fun transport(
@@ -100,6 +110,33 @@ class UvcBulkDriverTest {
         assertEquals(42L, frames[0].timestampNanos)
         assertEquals(3, source.stats.value.framesEmitted)
         assertTrue(source.stats.value.bytesReceived > 0)
+    }
+
+    @Test
+    fun `a small negotiated payload sizes the reads so no read spans a payload boundary`() {
+        // The device commits 4096, a quarter of CHUNK_SIZE. Reading 16 KiB would swallow up to four
+        // payloads per read, and the parser only looks for a header once a payload has ended -- the
+        // second payload's header would be parsed as picture data.
+        val jpeg = TestPackets.fakeJpeg(4080)          // 4084 bytes; + a 12-byte header = 4096 exactly
+        val packets = (0 until 2).map { i ->
+            val out = ByteArray(4096)
+            out[0] = 12
+            out[1] = ((i and 1) or 0x02).toByte()      // FID + EOF
+            jpeg.copyInto(out, 12)
+            LoggedPacket(i.toLong(), out)
+        }
+        val t = SizingTransport(transport(packets, maxPayload = 4096))
+        val source = driver().open(t)
+        val frames = runBlocking { source.frames.take(2).toList() }
+
+        assertEquals(2, frames.size)
+        frames.forEach { assertArrayEquals(jpeg, it.jpegBytes()) }
+        assertEquals(2, source.stats.value.framesEmitted)
+        assertEquals(0, source.stats.value.framesDropped)
+        assertEquals(0, source.stats.value.headerErrors)
+        val sizes = synchronized(t.readSizes) { t.readSizes.toList() }
+        assertTrue(sizes.isNotEmpty(), "no bulk read was issued")
+        assertTrue(sizes.all { it == 4096 }, "reads must be one payload each, were ${sizes.distinct()}")
     }
 
     @Test

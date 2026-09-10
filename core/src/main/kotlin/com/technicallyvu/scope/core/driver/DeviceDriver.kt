@@ -31,6 +31,12 @@ data class StreamStats(
     val framesDropped: Long = 0,
     val framesPartial: Long = 0,
     val bytesReceived: Long = 0,
+    /**
+     * Transfers whose first bytes were not a usable payload header (UVC only; the vendor drivers
+     * leave it at 0). Carried but not yet shown in either overlay: it is a diagnostic for the first
+     * real UVC camera, and the overlays are already dense.
+     */
+    val headerErrors: Long = 0,
 )
 
 /** Receives every raw bulk-IN packet before parsing. Used for fixture capture. */

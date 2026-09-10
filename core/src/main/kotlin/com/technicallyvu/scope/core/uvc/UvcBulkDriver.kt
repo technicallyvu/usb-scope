@@ -67,7 +67,10 @@ class UvcBulkDriver(
                 val setup = handshake(transport, claimed)
                 return UvcFrameSource(transport, setup, clock, ioDispatcher, packetSink)
             } catch (e: UvcUnsupportedException) {
-                throw e // permanent: retrying cannot change the descriptors
+                // Permanent: retrying cannot change the descriptors. Hand back anything the
+                // half-finished handshake claimed, or the device stays locked to a dead session.
+                claimed.asReversed().forEach { runCatching { transport.releaseInterface(it) } }
+                throw e
             } catch (e: UsbException) {
                 lastError = e
                 // Best effort: a half-finished handshake may hold one or both interfaces, and the
@@ -116,7 +119,8 @@ class UvcBulkDriver(
                     ?.let { setting.alt to it.address }
             }
             ?: throw UvcUnsupportedException(
-                "This camera streams over isochronous endpoints, which is not supported yet",
+                "This camera has no bulk streaming endpoint (it streams over isochronous transfers, " +
+                    "which are not supported yet)",
             )
 
         val format = vs.formats.firstOrNull { it.kind == UvcFormatKind.MJPEG }
@@ -208,7 +212,21 @@ class UvcFrameSource internal constructor(
             setup.maxFrameBufferSize,
         )
         val fps = FpsMeter()
-        val buf = ByteArray(UvcBulkDriver.CHUNK_SIZE)
+        // Never larger than one payload: a read that spanned a payload boundary would hand the
+        // parser the next payload's header as if it were data, and the parser only looks for a
+        // header when a payload has ended. 16 KiB is the ceiling (the endpoint's practical maximum)
+        // and 512 the floor, so a device that commits an absurdly small payload size still reads in
+        // sensible units.
+        val capacity = setup.maxPayloadSize.coerceIn(MIN_READ_SIZE, UvcBulkDriver.CHUNK_SIZE)
+        val buf = ByteArray(capacity)
+        var lastFps = 0.0
+        fun snapshot() = StreamStats(
+            fps = lastFps,
+            framesEmitted = parser.framesEmitted,
+            framesDropped = parser.framesDropped,
+            bytesReceived = parser.bytesReceived,
+            headerErrors = parser.badHeaders,
+        )
         while (!closed) {
             val n = withContext(dispatcher) {
                 ioLock.withLock {
@@ -220,14 +238,21 @@ class UvcFrameSource internal constructor(
             // n == 0 (a zero-length packet, or a read timeout) is handed to the parser too: mid
             // payload it ends that payload, and with nothing in progress the parser ignores it.
             if (n > 0) packetSink?.onPacket(buf, n, now)
-            for (frame in parser.accept(buf, n, buf.size, now)) {
-                _stats.value = StreamStats(
-                    fps = fps.tick(now),
-                    framesEmitted = parser.framesEmitted,
-                    framesDropped = parser.framesDropped,
-                    bytesReceived = parser.bytesReceived,
-                )
+            for (frame in parser.accept(buf, n, capacity, now)) {
+                lastFps = fps.tick(now)
+                _stats.value = snapshot()
                 emit(frame)
+            }
+            // Bytes, drops and header errors move whether or not a frame completed. Publishing only
+            // on an emitted frame freezes the overlay exactly when it is most wanted: on a stream
+            // that is arriving but never completing a frame.
+            val published = _stats.value
+            if (published.framesEmitted != parser.framesEmitted ||
+                published.framesDropped != parser.framesDropped ||
+                published.bytesReceived != parser.bytesReceived ||
+                published.headerErrors != parser.badHeaders
+            ) {
+                _stats.value = snapshot()
             }
         }
     }
@@ -242,5 +267,10 @@ class UvcFrameSource internal constructor(
             runCatching { transport.releaseInterface(setup.controlInterface) }
             runCatching { transport.close() }
         }
+    }
+
+    private companion object {
+        /** Floor under the bulk read size, for a device that commits an implausibly small payload. */
+        const val MIN_READ_SIZE = 512
     }
 }
