@@ -47,6 +47,11 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     val activity = LocalActivity.current
     val wide = if (activity == null) false else calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
 
+    if (ui.showTrust) {
+        TrustScreen(onBack = vm::toggleTrust)
+        return
+    }
+
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StatusBar(ui)
         if (wide) {
@@ -117,6 +122,7 @@ private fun Controls(ui: UiState, vm: ScopeViewModel, onRequestPermission: (UsbD
     OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
     OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }
     OutlinedButton(onClick = vm::toggleStats) { Text(if (ui.showStats) "Hide stats" else "Stats") }
+    OutlinedButton(onClick = vm::toggleTrust) { Text("About") }
     if (BuildConfig.DEBUG) {
         OutlinedButton(onClick = { if (ui.replaying) vm.stopReplay() else vm.startReplay() }) { Text(if (ui.replaying) "Stop replay" else "Replay fixture") }
     }

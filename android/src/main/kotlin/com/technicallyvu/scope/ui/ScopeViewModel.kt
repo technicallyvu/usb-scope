@@ -42,6 +42,7 @@ data class UiState(
     val session: SessionState = SessionState(),
     val image: Bitmap? = null,
     val showStats: Boolean = false,
+    val showTrust: Boolean = false,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     val replaying: Boolean = false,
@@ -173,6 +174,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun rotate() = session.rotate()
     fun toggleMirror() = session.toggleMirror()
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
+    fun toggleTrust() = _ui.update { it.copy(showTrust = !it.showTrust) }
     fun toggleDenoise() = session.setDenoise(!session.state.value.denoise)
 
     fun snapshot() {

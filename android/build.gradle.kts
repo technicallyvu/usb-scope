@@ -15,6 +15,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.2.0"
+        buildConfigField("String", "GIT_SHA", "\"${gitShortSha()}\"")
     }
 
     buildFeatures {
@@ -63,6 +64,13 @@ dependencies {
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
+
+// Short commit hash shown on the trust/about screen so a bug report can be tied to an exact build.
+// Uses providers.exec (not Runtime.exec) so it participates correctly in configuration cache; falls
+// back to "unknown" when git isn't available (e.g. a source archive build) or the command fails.
+fun gitShortSha(): String = runCatching {
+    providers.exec { commandLine("git", "rev-parse", "--short", "HEAD") }.standardOutput.asText.get().trim()
+}.getOrDefault("unknown")
 
 // Privacy gate: fail the build if any dependency drags in the INTERNET permission.
 androidComponents {
