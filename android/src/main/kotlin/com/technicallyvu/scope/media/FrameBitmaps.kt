@@ -14,7 +14,12 @@ class FrameBitmaps {
 
     fun toBitmap(data: FrameData, argbDenoiser: TemporalDenoiser? = null): Bitmap? = when (data) {
         is FrameData.Jpeg -> {
-            val opts = BitmapFactory.Options().apply { inMutable = true; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+            // Mutable only when the denoiser needs to write pixels back into it; an immutable
+            // decode is cheaper and, for the no-denoise path, is what the rest of the app assumes.
+            val opts = BitmapFactory.Options().apply {
+                inMutable = argbDenoiser != null
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
             val bmp = BitmapFactory.decodeByteArray(data.bytes, 0, data.bytes.size, opts)
             if (bmp != null && argbDenoiser != null) {
                 val n = bmp.width * bmp.height

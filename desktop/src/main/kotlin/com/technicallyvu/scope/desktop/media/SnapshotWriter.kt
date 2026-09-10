@@ -15,7 +15,12 @@ import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 
-/** Saves the sensor's original JPEG bytes plus an EXIF orientation tag for the chosen view transform. */
+/**
+ * Writes snapshots to disk. Two routes, both named `SCOPE_<timestamp>.jpg`:
+ * from [FrameData] it saves the sensor's original JPEG bytes (or a freshly encoded JPEG for YUYV)
+ * plus an EXIF orientation tag for the chosen view transform; from a [BufferedImage] it saves the
+ * picture exactly as shown, with no EXIF tag because the transform is already in the pixels.
+ */
 object SnapshotWriter {
     private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
 
@@ -46,6 +51,18 @@ object SnapshotWriter {
             is FrameData.Yuyv422 -> encodeJpeg(ImageTransforms.yuyvToImage(data))
         }
         return write(jpeg, rotationDegrees, mirror, dir, now)
+    }
+
+    /**
+     * Saves [image] as it stands: a JPEG at quality 0.92 with no EXIF orientation tag, because the
+     * rotation and mirror the user chose are already baked into these pixels. Used for the denoised
+     * picture, which exists only after decoding and so has no original bytes to preserve.
+     */
+    fun write(image: BufferedImage, dir: Path, now: LocalDateTime = LocalDateTime.now()): Path {
+        Files.createDirectories(dir)
+        val file = uniquePath(dir, "SCOPE_" + now.format(stamp), ".jpg")
+        Files.newOutputStream(file).use { it.write(encodeJpeg(image)) }
+        return file
     }
 
     private fun encodeJpeg(img: BufferedImage, quality: Float = 0.92f): ByteArray {

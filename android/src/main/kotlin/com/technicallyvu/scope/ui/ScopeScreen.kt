@@ -122,7 +122,9 @@ private fun Controls(ui: UiState, vm: ScopeViewModel, onRequestPermission: (UsbD
     OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
     OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }
     OutlinedButton(onClick = vm::toggleStats) { Text(if (ui.showStats) "Hide stats" else "Stats") }
-    OutlinedButton(onClick = vm::toggleTrust) { Text("About") }
+    // Disabled while recording: the About screen replaces the live view, and with it the REC badge —
+    // the only on-screen sign that a clip is still being written.
+    OutlinedButton(onClick = vm::toggleTrust, enabled = !s.recording) { Text("About") }
     if (BuildConfig.DEBUG) {
         OutlinedButton(onClick = { if (ui.replaying) vm.stopReplay() else vm.startReplay() }) { Text(if (ui.replaying) "Stop replay" else "Replay fixture") }
     }

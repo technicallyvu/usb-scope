@@ -197,14 +197,18 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".jpg"
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                when (data) {
+                when {
+                    // A snapshot saves what the user sees. With denoise on that is the filtered
+                    // picture, which only exists as pixels, so both frame kinds go through the
+                    // bitmap (re-encoded JPEG at quality 92, rotation/mirror already baked in).
+                    s.denoise -> saver.saveBitmapJpeg(shown, name)
                     // Original bytes plus an EXIF orientation tag: no re-encode, no quality loss.
-                    is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
+                    data is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
                     // Compress the bitmap the user is looking at. Never re-convert: FrameBitmaps
-                    // reuses its pixel buffer for the worker's next frame. Bitmaps out of
-                    // Bitmap.createBitmap are immutable, so compressing here while the worker
-                    // moves on is safe.
-                    is FrameData.Yuyv422 -> saver.saveBitmapJpeg(shown, name)
+                    // reuses its pixel buffer for the worker's next frame. Every bitmap handed to
+                    // the UI is freshly allocated per frame and never written to again once
+                    // published, so compressing here while the worker moves on is safe.
+                    else -> saver.saveBitmapJpeg(shown, name)
                 }
             }.onSuccess { session.markSaved(name) }
              .onFailure { e -> _ui.update { it.copy(message = "Snapshot failed: ${e.message}") } }

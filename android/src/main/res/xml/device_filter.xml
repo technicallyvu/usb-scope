@@ -4,4 +4,6 @@
     <usb-device vendor-id="11491" product-id="14376" />
     <!-- 0329:2022 -->
     <usb-device vendor-id="809" product-id="8226" />
+    <!-- UVC VideoControl: any standard USB video class camera also offers to open the app -->
+    <usb-device class="14" subclass="1" protocol="0" />
 </resources>

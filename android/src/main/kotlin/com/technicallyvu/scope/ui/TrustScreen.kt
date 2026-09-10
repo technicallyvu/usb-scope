@@ -1,5 +1,6 @@
 package com.technicallyvu.scope.ui
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -76,9 +77,7 @@ fun TrustScreen(onBack: () -> Unit) {
                 Text(
                     sourceUrl,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.clickable {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(sourceUrl)))
-                    },
+                    modifier = Modifier.clickable { openLink(context, sourceUrl) },
                 )
             }
             item { HorizontalDivider() }
@@ -89,9 +88,7 @@ fun TrustScreen(onBack: () -> Unit) {
                     Text(
                         a.name,
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.clickable {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(a.url)))
-                        },
+                        modifier = Modifier.clickable { openLink(context, a.url) },
                     )
                     Text("${a.license} — ${a.note}", style = MaterialTheme.typography.bodySmall)
                 }
@@ -101,4 +98,14 @@ fun TrustScreen(onBack: () -> Unit) {
             item { Text(TrustInfo.licenseText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
         }
     }
+}
+
+/**
+ * Hands [url] to whatever can view it. A device with no browser (or with links disabled by policy)
+ * throws ActivityNotFoundException from startActivity; the tap then does nothing and the URL stays
+ * on screen as plain text to copy, which must never be worth crashing the app over.
+ */
+private fun openLink(context: Context, url: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        .onFailure { /* no browser; show the URL text as-is */ }
 }

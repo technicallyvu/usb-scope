@@ -109,11 +109,16 @@ class ScopeViewModel(
         runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } }
     }
 
+    /**
+     * Saves what the user sees. With denoise on that is the filtered picture, which only exists as
+     * decoded pixels, so the shown image is re-encoded (rotation/mirror already baked in); with
+     * denoise off a JPEG frame keeps its original bytes and an EXIF orientation tag.
+     */
     fun snapshot() {
-        val data = lastFrame ?: return
         val s = _state.value
         val path = try {
-            SnapshotWriter.write(data, s.rotation, s.mirror, s.outputDir)
+            if (s.denoise) SnapshotWriter.write(lastImage ?: return, s.outputDir)
+            else SnapshotWriter.write(lastFrame ?: return, s.rotation, s.mirror, s.outputDir)
         } catch (e: Exception) {
             System.err.println("Snapshot failed: ${e.message}")
             return
@@ -166,7 +171,12 @@ class ScopeViewModel(
 
     fun toggleDebug() = _state.update { it.copy(showDebug = !it.showDebug) }
 
-    fun toggleDenoise() = _state.update { it.copy(denoise = !it.denoise) }
+    /** Re-enabling starts from a clean slate: the stale history is from before the toggle-off. */
+    fun toggleDenoise() {
+        val enabled = !_state.value.denoise
+        if (enabled) { yuvDenoiser?.reset(); argbDenoiser?.reset() }
+        _state.update { it.copy(denoise = enabled) }
+    }
 
     fun setOutputDir(dir: Path) = _state.update { it.copy(outputDir = dir) }
 
