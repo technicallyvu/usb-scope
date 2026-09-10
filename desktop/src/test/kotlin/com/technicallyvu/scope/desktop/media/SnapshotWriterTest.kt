@@ -5,6 +5,7 @@ import org.apache.commons.imaging.Imaging
 import org.apache.commons.imaging.formats.jpeg.JpegImageMetadata
 import org.apache.commons.imaging.formats.tiff.constants.TiffTagConstants
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -50,6 +51,29 @@ class SnapshotWriterTest {
         val b = SnapshotWriter.write(jpeg(), 0, false, dir, t)
         assertTrue(a != b)
         assertTrue(Files.exists(a) && Files.exists(b))
+    }
+
+    @Test
+    fun `write(BufferedImage) produces a readable JPEG without an orientation tag`(@TempDir dir: Path) {
+        // The denoise route: the rotation/mirror the user chose are already in these pixels, so a
+        // viewer must not rotate them a second time on the strength of an EXIF tag.
+        val img = BufferedImage(9, 21, BufferedImage.TYPE_INT_RGB)
+        for (y in 0 until 21) for (x in 0 until 9) img.setRGB(x, y, if (x < 4) 0xFFFFFF else 0x000000)
+
+        val path = SnapshotWriter.write(img, dir, LocalDateTime.of(2026, 9, 8, 16, 30, 0))
+        assertEquals("SCOPE_20260908_163000.jpg", path.fileName.toString())
+
+        val read = requireNotNull(ImageIO.read(path.toFile()))
+        assertEquals(9, read.width)
+        assertEquals(21, read.height)
+        assertTrue((read.getRGB(1, 1) and 0xFF) > 200, "left half should be near white")
+        assertTrue((read.getRGB(7, 1) and 0xFF) < 60, "right half should be near black")
+
+        val meta = Imaging.getMetadata(Files.readAllBytes(path)) as? JpegImageMetadata
+        assertNull(
+            meta?.findExifValue(TiffTagConstants.TIFF_TAG_ORIENTATION),
+            "the transform is in the pixels; an orientation tag would apply it twice",
+        )
     }
 
     @Test

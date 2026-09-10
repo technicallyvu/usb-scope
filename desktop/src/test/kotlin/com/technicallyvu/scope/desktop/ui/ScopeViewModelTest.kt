@@ -26,6 +26,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import javax.imageio.ImageIO
 
 class ScopeViewModelTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -235,6 +236,29 @@ class ScopeViewModelTest {
         assertTrue(!vm.state.value.denoise)
         vm.toggleDenoise()
         assertTrue(vm.state.value.denoise)
+    }
+
+    @Test
+    fun `with denoise on the snapshot has the dimensions of the shown image`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }
+        val vm = vm(devices, dir)
+        vm.start()
+        val shown = requireNotNull(withTimeout(5_000) { vm.state.first { it.image != null } }.image)
+        assertTrue(vm.state.value.denoise, "denoise is on by default; this test is about that path")
+        // The 32x24 sensor frame shown through the driver's default 90-degree rotation.
+        assertEquals(24, shown.width)
+        assertEquals(32, shown.height)
+
+        vm.snapshot()
+        val jpg = requireNotNull(
+            Files.list(dir).use { it.toList() }.firstOrNull { it.fileName.toString().endsWith(".jpg") },
+        ) { "no jpg written" }
+        val saved = requireNotNull(ImageIO.read(jpg.toFile()))
+        // Re-encoded from the filtered picture, so the rotation is in the pixels, not in a tag.
+        assertEquals(shown.width, saved.width)
+        assertEquals(shown.height, saved.height)
+        vm.stop()
     }
 
     @Test

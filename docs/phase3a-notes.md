@@ -16,9 +16,12 @@ Work in progress. Task 6 completes this file; what follows is the decision recor
 - **Denoiser motion metric: block mean plus a max-difference override.** The per-block (4x4) motion
   value is the difference of the block's *mean* luma, which suppresses per-pixel sensor noise, but it
   is blind to a small high-contrast feature moving inside one block (the mean does not change) and to a
-  bar sliding across a block boundary. Each block therefore also tracks its largest per-sample luma
-  difference and passes the current frame straight through when that reaches `2 x motionThreshold`
-  (48/255). Noise of +-20 cannot reach 48, so immunity on a static scene is unchanged.
+  bar sliding across a block boundary. Each block therefore also counts the samples whose per-sample
+  luma difference reaches `2 x motionThreshold` (48/255) and passes the current frame straight through
+  once **two or more** of them do. Two, not one: a lone sample that far out is as likely to be a
+  Gaussian noise outlier as motion, while anything that actually moved shows up at both the position
+  it left and the one it arrived at. Noise of +-20 cannot reach 48, so immunity on a static scene is
+  unchanged.
 
 - **`FrameSink.onStreamStarted()`** (default no-op, called by `ScopeSession` on entering `Streaming`)
   is how a shell resets per-stream state it owns. The Android sink resets its ARGB denoiser there;
@@ -32,4 +35,46 @@ Work in progress. Task 6 completes this file; what follows is the decision recor
   `startActivity`; the tap does nothing and the URL stays on screen as copyable text.
 
 - **UVC devices trigger the open-app prompt.** `device_filter.xml` matches USB class 14 / subclass 1
-  (VideoControl) alongside the two known endoscope VID:PIDs.
+  (VideoControl) alongside the two known endoscope VID:PIDs. No `protocol` attribute: UVC 1.0/1.1 use
+  protocol 0 but 1.5 uses 1, so pinning it would quietly exclude every 1.5 camera.
+
+- **`UvcBulkDriver.matches` looks only for a VideoControl interface** (class 0x0E, subclass 0x01;
+  spec §13.1). The streaming interfaces are read from the configuration descriptor, which is the
+  authority; the platform's interface summary is not always complete. A device that really has no
+  streaming interface is therefore refused by `open`, with a message, rather than silently not
+  matching.
+
+- **The in-progress UVC frame is bounded.** The parser caps it at twice the negotiated (or declared)
+  `dwMaxVideoFrameSize`, with a 64 KiB floor — a stream that never sets EOF and never toggles the
+  frame id would otherwise buffer until the process died. Past the cap the frame is counted as
+  dropped once and its bytes discarded until the next EOF or FID toggle resynchronises the stream.
+  Malformed payload headers are counted separately (`badHeaders`) and mark a frame already under way
+  as damaged, so it is dropped at its end instead of emitted short.
+
+## Known limits (pending hardware)
+
+- **Only the first VideoStreaming interface is used, and VC/VS are not paired by function.** A
+  dual-camera device (two VC/VS pairs behind one IAD) would always open the first stream, and a
+  configuration whose VS interfaces belong to a *different* video function than the VC header we
+  parsed would be mis-paired. Correct handling means walking the Interface Association Descriptors
+  and offering the user a choice of stream; no such device is available to test against.
+
+- **On Android only the first CONFIGURATION record is parsed.** `UsbDevice.getRawDescriptors()`
+  returns the descriptors for the active configuration; a multi-configuration device whose video
+  function lives in another configuration is not reachable, and switching configurations is not
+  exposed by the Android USB API.
+
+- **The denoiser's max-difference override is calibrated on uniform synthetic noise** (+-20 on a
+  gradient). Real sensor noise is neither uniform nor uncorrelated, and gain rises in the dark, so
+  the `2 x motionThreshold` / two-sample rule needs a look on the phone against a real scope before
+  it can be called tuned rather than reasoned.
+
+- **Isochronous streaming is unsupported.** `UvcBulkDriver` refuses an isochronous-only camera with
+  an explanation. Isochronous transfers need packet-scheduling APIs that neither backend (libusb's
+  async transfer API, Android's `UsbRequest` queueing) is wired up for yet; most webcams are
+  isochronous, so this is the main reason the driver is billed as endoscope-oriented rather than
+  universal.
+
+- **No UVC hardware was available in this phase.** Everything above is verified against synthetic
+  descriptors and payload streams only; the first real UVC camera is expected to shake out
+  quirks (short packets, header lengths, devices that ignore probe/commit).

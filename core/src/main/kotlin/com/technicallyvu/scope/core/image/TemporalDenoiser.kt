@@ -15,11 +15,13 @@ import kotlin.math.abs
  *
  * The block mean alone has a blind spot: a small high-contrast feature moving *inside* one block
  * (or a bright bar sliding across a block boundary) can leave the block's mean unchanged, so the
- * filter would treat it as static and smear it. Alongside the mean, each block therefore also
- * tracks its largest per-sample absolute luma difference; when that maximum reaches
- * `2 * motionThreshold` the block is forced to full pass-through (`a = 256`) regardless of the
- * mean. The doubled threshold keeps noise immunity: frame-to-frame sensor noise of +-20 rarely
- * reaches 48, while a moving feature against its background clears it easily.
+ * filter would treat it as static and smear it. Alongside the mean, each block therefore counts the
+ * samples whose absolute luma difference reaches `2 * motionThreshold`; **two or more** of them
+ * force the block to full pass-through (`a = 256`) regardless of the mean. The doubled threshold
+ * keeps noise immunity (frame-to-frame sensor noise of +-20 rarely reaches 48) and requiring a pair
+ * rules out the lone Gaussian outlier, which a single-sample maximum would have mistaken for
+ * motion. A real moving feature always produces at least two: the position it left and the one it
+ * arrived at.
  *
  * Not thread-safe: one instance per stream.
  */
@@ -38,9 +40,12 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
 
     private fun staticWeight256(): Int = ((1f - 0.8f * strength) * 256f).toInt().coerceIn(0, 256)
 
-    /** The blend weight (0..256) for a block, from its mean-luma motion and its largest per-sample difference. */
-    private fun weight256(motion: Int, maxDiff: Int, aStatic: Int): Int {
-        if (maxDiff >= 2 * motionThreshold) return 256
+    /**
+     * The blend weight (0..256) for a block, from its mean-luma motion and [strongDiffs], the number
+     * of samples in the block whose absolute luma difference reached `2 * motionThreshold`.
+     */
+    private fun weight256(motion: Int, strongDiffs: Int, aStatic: Int): Int {
+        if (strongDiffs >= MIN_STRONG_DIFFS) return 256
         val m = maxOf(0, motion - NOISE_FLOOR)
         if (m >= motionThreshold) return 256
         return aStatic + (256 - aStatic) * m / motionThreshold
@@ -49,6 +54,13 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
     companion object {
         /** Subtracted from the block-mean motion metric before thresholding, to absorb residual noise. */
         const val NOISE_FLOOR = 4
+
+        /**
+         * Samples at or past `2 * motionThreshold` needed before a block is forced to pass through.
+         * Two, not one: a single such sample is as likely to be a noise outlier as motion, while a
+         * feature that moved always shows up twice (where it was, and where it now is).
+         */
+        const val MIN_STRONG_DIFFS = 2
     }
 
     /** Returns a new, denoised frame. The input is never modified. */
@@ -61,6 +73,7 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
         }
         val out = ByteArray(src.size)
         val aStatic = staticWeight256()
+        val strongDiff = 2 * motionThreshold
         val rowBytes = w * 2
         var by = 0
         while (by < h) {
@@ -68,18 +81,18 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
             var bx = 0
             while (bx < w) {
                 val bw = minOf(blockSize, w - bx)
-                var curSum = 0; var prevSum = 0; var count = 0; var maxDiff = 0
+                var curSum = 0; var prevSum = 0; var count = 0; var strongDiffs = 0
                 for (y in by until by + bh) {
                     var i = y * rowBytes + bx * 2
                     for (x in 0 until bw) {
                         val c = src[i].toInt() and 0xFF
                         val p = prev[i].toInt() and 0xFF
                         curSum += c; prevSum += p
-                        val d = abs(c - p); if (d > maxDiff) maxDiff = d
+                        if (abs(c - p) >= strongDiff) strongDiffs++
                         i += 2; count++
                     }
                 }
-                val a = weight256(abs(curSum - prevSum) / count, maxDiff, aStatic)
+                val a = weight256(abs(curSum - prevSum) / count, strongDiffs, aStatic)
                 for (y in by until by + bh) {
                     val start = y * rowBytes + bx * 2
                     val end = start + bw * 2
@@ -106,21 +119,22 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
             return
         }
         val aStatic = staticWeight256()
+        val strongDiff = 2 * motionThreshold
         var by = 0
         while (by < height) {
             val bh = minOf(blockSize, height - by)
             var bx = 0
             while (bx < width) {
                 val bw = minOf(blockSize, width - bx)
-                var curSum = 0; var prevSum = 0; var count = 0; var maxDiff = 0
+                var curSum = 0; var prevSum = 0; var count = 0; var strongDiffs = 0
                 for (y in by until by + bh) for (x in bx until bx + bw) {
                     val i = y * width + x
                     val c = luma(pixels[i]); val p = luma(prev[i])
                     curSum += c; prevSum += p
-                    val d = abs(c - p); if (d > maxDiff) maxDiff = d
+                    if (abs(c - p) >= strongDiff) strongDiffs++
                     count++
                 }
-                val a = weight256(abs(curSum - prevSum) / count, maxDiff, aStatic)
+                val a = weight256(abs(curSum - prevSum) / count, strongDiffs, aStatic)
                 for (y in by until by + bh) for (x in bx until bx + bw) {
                     val i = y * width + x
                     val c = pixels[i]; val p = prev[i]

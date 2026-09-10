@@ -72,6 +72,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
      * [attach]) drops frames instead of racing the new one. Mutated only from [attach] on Main. */
     @Volatile private var currentSessionToken = 0L
     private var nextSessionToken = 0L
+    /** The sink of the current session, so main-thread actions can reach its per-stream state. */
+    @Volatile private var currentSink: SessionSink? = null
 
     init {
         attach(usbDevices, replaying = false)
@@ -143,6 +145,15 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (token != currentSessionToken) return
             argbDenoiser.reset()
         }
+
+        /**
+         * Drops the ARGB denoiser's history. Called from Main when denoise is switched back on, so
+         * the first filtered frame is not blended with whatever was on screen before the toggle
+         * (frames from the off period never reached the denoiser). [TemporalDenoiser.reset] only
+         * clears references, and the worker re-seeds them on its next frame, so racing it costs at
+         * worst one extra pass-through frame.
+         */
+        fun resetDenoisers() = argbDenoiser.reset()
     }
 
     /**
@@ -156,7 +167,9 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         stateJob?.cancel()
         val token = ++nextSessionToken
         currentSessionToken = token
-        val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = SessionSink(token, FrameBitmaps()))
+        val sink = SessionSink(token, FrameBitmaps())
+        currentSink = sink
+        val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = sink)
         session = newSession
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
@@ -185,7 +198,16 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleMirror() = session.toggleMirror()
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
     fun toggleTrust() = _ui.update { it.copy(showTrust = !it.showTrust) }
-    fun toggleDenoise() = session.setDenoise(!session.state.value.denoise)
+    /**
+     * Re-enabling starts from a clean slate. [ScopeSession.setDenoise] builds a fresh YUV denoiser
+     * on its own; the shell's ARGB one (for decoded JPEG frames) lives in the sink and is reset
+     * here, otherwise the first filtered frame would blend with a picture from before the toggle.
+     */
+    fun toggleDenoise() {
+        val enabled = !session.state.value.denoise
+        if (enabled) currentSink?.resetDenoisers()
+        session.setDenoise(enabled)
+    }
 
     fun snapshot() {
         // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
