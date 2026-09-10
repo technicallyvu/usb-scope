@@ -2,7 +2,7 @@ package com.technicallyvu.scope.core.usb
 
 import java.util.Locale
 
-class UsbException(message: String, val code: Int = 0, cause: Throwable? = null) : Exception(message, cause)
+open class UsbException(message: String, val code: Int = 0, cause: Throwable? = null) : Exception(message, cause)
 
 /** One interface of the active configuration (alternate setting 0). */
 data class UsbInterfaceInfo(val number: Int, val usbClass: Int, val subclass: Int, val protocol: Int)

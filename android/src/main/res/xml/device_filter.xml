@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 2CE3:3828 -->
+    <usb-device vendor-id="11491" product-id="14376" />
+    <!-- 0329:2022 -->
+    <usb-device vendor-id="809" product-id="8226" />
+</resources>
