@@ -26,6 +26,7 @@ jmz3/EndoscopeCamera, NinesLastGoal/supercamera_WIN10.
 |---|---|---|---|
 | `i4season-yuv` | 2CE3:3828, 0329:2022 | one interface FF/F0/01 | 320x240 YUYV, ~11 fps (verified on hardware) |
 | `useeplus` | 2CE3:3828, 0329:2022 | interfaces FF/F0/00 + FF/F0/01 | 640x480 MJPEG (from public docs; untested here) |
+| `uvc-bulk` | any | USB Video Class, bulk streaming endpoint | MJPEG or YUY2 at the camera's default frame (unit-tested only; no UVC hardware yet; isochronous cameras are refused with a message) |
 
 ## Status
 Phase 1 (Windows dev bench) accepted 2026-09-09 against an i4season "su4p-002" (2CE3:3828, firmware 5.0.13).
@@ -41,3 +42,9 @@ control that streams the bundled capture without hardware, and log per-second fr
 `ScopeViewModel`. Requires the Android SDK (compileSdk 37, targetSdk 36, minSdk 29); see `docs/dependencies.md`.
 
 Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`.
+
+## Features (v0.3.0)
+- Temporal denoise (toggle in both apps): adaptive frame blending that removes sensor grain when the probe is
+  still and passes moving detail through. Snapshots save what is on screen.
+- About & privacy screen (Android) and About dialog (desktop): permissions the app does not have, source link,
+  MIT license, attribution to the prior reverse-engineering projects, version and build id.

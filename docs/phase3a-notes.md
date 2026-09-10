@@ -1,6 +1,7 @@
 # Phase 3a notes (UVC driver, temporal denoise, trust screen)
 
-Work in progress. Task 6 completes this file; what follows is the decision record so far.
+Completed 2026-09-10. Denoise and the trust screen are built and unit-tested; UVC is unit-tested only (no
+hardware). Denoise and the trust screen await Anthony's look on the phone the next time it is connected.
 
 ## Decisions
 
@@ -78,3 +79,22 @@ Work in progress. Task 6 completes this file; what follows is the decision recor
 - **No UVC hardware was available in this phase.** Everything above is verified against synthetic
   descriptors and payload streams only; the first real UVC camera is expected to shake out
   quirks (short packets, header lengths, devices that ignore probe/commit).
+
+## Hardware verification still pending
+- **UVC:** plug any UVC camera (a plain USB webcam counts) into the PC with WinUSB bound via Zadig, run
+  `.\gradlew.bat :desktop:probe --args="--list"` and expect `<- uvc-bulk`; then `--seconds 5`. A camera that only
+  offers isochronous endpoints will fail `open` with the "isochronous" message, which is the expected outcome for
+  most webcams; a bulk-mode endoscope is the real target. On the phone: plug the camera in, accept the prompt, and
+  check the Stats overlay. Record the first `.upkt` fixture as `core/src/test/resources/fixtures/uvc-<name>.upkt`.
+- **Denoise:** on the phone, toggle Denoise on/off while pointing at a dim, textured surface; on should be visibly
+  cleaner with no smear when the probe moves. The max-difference override was calibrated on uniform +-20 noise;
+  if real sensor noise switches the filter off too often (grainy picture with denoise on), raise the override to
+  3x the threshold.
+- **Trust screen:** open About & privacy on the phone; "Permissions requested: 0" and the build id should show.
+  `source_url` is a placeholder until the GitHub repository exists.
+
+## Phase 3 launch backlog (carried)
+See `docs/phase2-notes.md` "Deferred to Phase 3": icon and theme, release signing and minify, Play assets and
+privacy policy, rename the debug replay control, strings to resources, recording-start indicator, per-frame
+recomposition, desktop adoption of `ScopeSession` and libusb async reads, bitmap ring, `RealUsbConnection`
+request-pool tests, an isochronous UVC path (native libusb/libuvc), a stream picker for dual-camera devices.
