@@ -239,3 +239,45 @@ Stream: repeating `[511-byte header][width×height×2 bytes YUYV 4:2:2]`. Header
 - `UsbDeviceInfo` gains the active configuration's interface list (`UsbInterfaceInfo(number, class, subclass, protocol)`), so drivers match on layout, not just IDs: `I4seasonYuvDriver` claims a lone `FF/F0/01` interface; `UseeplusDriver` claims the `FF/F0/00` + `FF/F0/01` pair.
 - `DeviceDriver` gains `defaultRotation` (useeplus 90, i4season 0) and `withPacketSink(sink)`.
 - Phase 1 acceptance runs against the i4season driver. The useeplus driver stays, untested on hardware, for the other variant.
+
+## 13. Amendment 2026-09-10: Phase 3a features
+
+Confirmed by Anthony 2026-09-10 (prompt-first). Three features on top of the accepted Phase 2 app.
+
+### 13.1 Generic UVC driver (bulk transport first)
+- New `core` driver `uvc-bulk` implementing the same `DeviceDriver` interface. Matches any device whose
+  interfaces include class `0x0E` subclass `0x01` (VideoControl). `open` reads the full configuration
+  descriptor (a new `UsbTransport.readConfigDescriptor()` default method via GET_DESCRIPTOR; Android
+  overrides it with `UsbDeviceConnection.rawDescriptors`), parses the VideoStreaming interface (input
+  header, MJPEG and uncompressed-YUY2 formats, frame descriptors, endpoints per alternate setting),
+  negotiates PROBE/COMMIT (UVC 1.0/1.1/1.5 struct lengths chosen from `bcdUVC`), selects the streaming
+  alternate setting that carries a **bulk** endpoint, and streams. Payloads are reassembled from the UVC
+  payload header (FID toggle / EOF / error bits) into `FrameData.Jpeg` (MJPEG) or `FrameData.Yuyv422`.
+- Devices whose streaming endpoints are isochronous only are matched but `open` fails with a clear
+  message ("isochronous UVC is not supported yet"), so the UI explains rather than ignoring the camera.
+  Isochronous support requires a native libusb/libuvc component on Android and is a later step.
+- Format choice: MJPEG preferred, else YUY2; frame = the format's default frame index, else the first.
+- Windows: UVC devices are owned by the OS webcam driver; the core driver runs there only against a
+  WinUSB-bound device or in replay. OS-webcam support on the desktop is a separate later item.
+- Verification: unit tests against synthetic descriptors and payload streams; hardware verification
+  pending until a UVC device is available (recorded in the notes).
+
+### 13.2 Temporal denoise
+- `core/image/TemporalDenoiser`: recursive blend of the current frame into the previous output with a
+  per-block (4x4) adaptive weight: full weight to the current frame where the block's mean luma
+  difference exceeds `motionThreshold` (24/255), down to `1 - 0.75*strength` where static, linear in
+  between. Works on YUYV bytes (applied inside `ScopeSession` for YUV frames, so both shells get it) and
+  on ARGB int arrays (applied by each shell after decoding JPEG frames). Reset on stream start or size
+  change. Default on, strength 0.6; user toggle in both shells (`SessionState.denoise`).
+- Acceptance: unit tests show noise reduction on a static synthetic scene and no ghosting on a moving
+  edge; Anthony judges the live picture on the phone.
+
+### 13.3 Trust / About screen
+- `core/TrustInfo`: MIT license text, attribution list (hbens, echase/ProbeView, MAkcanca, ollyoid, jmz3,
+  NinesLastGoal, plus the vendor-app protocol analysis note), the no-network statement.
+- Android: an "About & privacy" screen reachable from the main screen: app version and build id (git
+  short SHA baked into `BuildConfig`), the live count of requested permissions from `PackageManager`
+  (expected 0) with the list of permissions the app does not have, the source URL (string resource
+  `source_url`, placeholder until the GitHub repository exists), license, attributions.
+- Desktop: an About dialog with the same content (version, no-network statement, license, attributions).
+- Satisfies the §6 in-app attribution requirement.
