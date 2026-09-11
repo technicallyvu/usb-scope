@@ -49,6 +49,31 @@ interface UsbTransport : AutoCloseable {
      */
     fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, data: ByteArray, timeoutMs: Int): Int
     /**
+     * The full configuration descriptor of the active configuration: the configuration record itself
+     * plus every interface, endpoint and class-specific block that follows it.
+     *
+     * Default implementation: two standard `GET_DESCRIPTOR` control requests (bmRequestType 0x80,
+     * bRequest 0x06, wValue 0x0200 = CONFIGURATION index 0). The first reads the 9-byte header only,
+     * because `wTotalLength` is what says how big the real thing is; the second reads that many bytes.
+     * The result is truncated to what the device actually returned, so a short second read yields a
+     * short blob rather than a tail of zeros — [com.technicallyvu.scope.core.uvc.UvcDescriptors]
+     * parses defensively for exactly that reason.
+     *
+     * Platforms that already have the raw descriptors cached (Android) should override this and skip
+     * the control traffic.
+     */
+    fun readConfigDescriptor(): ByteArray {
+        val head = ByteArray(9)
+        val n = controlTransfer(0x80, 0x06, 0x0200, 0, head, 1000)
+        if (n < 4) throw UsbException("config descriptor header short ($n bytes)")
+        val total = (head[2].toInt() and 0xFF) or ((head[3].toInt() and 0xFF) shl 8)
+        if (total < 9) throw UsbException("config descriptor wTotalLength $total is not a descriptor")
+        val full = ByteArray(total)
+        val m = controlTransfer(0x80, 0x06, 0x0200, 0, full, 1000)
+        return full.copyOf(m.coerceIn(0, total))
+    }
+
+    /**
      * USB port reset. **Not used by any driver**: on libusb a reset invalidates the device handle, so it
      * cannot be used inside an open-retry loop, and Android's `UsbDeviceConnection` has no equivalent.
      * Kept for the desktop probe and manual debugging only; a platform without it may throw.

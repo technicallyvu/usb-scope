@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.desktop.media
 
 import com.technicallyvu.scope.core.driver.FrameData
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferByte
@@ -11,9 +12,20 @@ object ImageTransforms {
     fun decodeJpeg(bytes: ByteArray): BufferedImage? =
         try { ImageIO.read(ByteArrayInputStream(bytes)) } catch (e: Exception) { null }
 
-    fun decode(data: FrameData): BufferedImage? = when (data) {
-        is FrameData.Jpeg -> decodeJpeg(data.bytes)
-        is FrameData.Yuyv422 -> yuyvToImage(data)
+    fun decode(data: FrameData): BufferedImage? = decode(data, null, null)
+
+    fun decode(data: FrameData, yuvDenoiser: TemporalDenoiser?, argbDenoiser: TemporalDenoiser?): BufferedImage? = when (data) {
+        is FrameData.Jpeg -> {
+            val img = decodeJpeg(data.bytes)
+            if (img != null && argbDenoiser != null) {
+                val w = img.width; val h = img.height
+                val pixels = img.getRGB(0, 0, w, h, null, 0, w)
+                argbDenoiser.applyArgb(pixels, w, h)
+                img.setRGB(0, 0, w, h, pixels, 0, w)
+            }
+            img
+        }
+        is FrameData.Yuyv422 -> yuyvToImage(yuvDenoiser?.apply(data) ?: data)
     }
 
     /** Packed Y0 U Y1 V (BT.601 limited range) to TYPE_3BYTE_BGR. */

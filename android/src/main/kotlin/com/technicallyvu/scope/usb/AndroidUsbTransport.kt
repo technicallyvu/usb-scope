@@ -74,9 +74,39 @@ class AndroidUsbTransport(
         return r
     }
 
+    /**
+     * Android has already read the descriptors when the device was enumerated, so the configuration
+     * is sliced out of [UsbConnection.rawDescriptors] instead of costing two control transfers: the
+     * raw blob is the 18-byte device descriptor followed by the configuration descriptor(s), so the
+     * first record of type 2 (CONFIGURATION) starts the part we want and its `wTotalLength` says how
+     * far it runs. Anything unexpected (no raw bytes, no configuration record, a length that runs off
+     * the end) falls back to the portable GET_DESCRIPTOR path.
+     */
+    override fun readConfigDescriptor(): ByteArray {
+        val raw = conn.rawDescriptors() ?: return super.readConfigDescriptor()
+        var i = 0
+        while (i + 2 <= raw.size) {
+            val length = raw[i].toInt() and 0xFF
+            if (length < 2) break
+            if ((raw[i + 1].toInt() and 0xFF) == DT_CONFIGURATION) {
+                if (i + 4 > raw.size) break
+                val total = (raw[i + 2].toInt() and 0xFF) or ((raw[i + 3].toInt() and 0xFF) shl 8)
+                if (total < length || i + total > raw.size) break
+                return raw.copyOfRange(i, i + total)
+            }
+            i += length
+        }
+        return super.readConfigDescriptor()
+    }
+
     override fun resetDevice() {
         throw UsbException("resetDevice is not available on Android")
     }
 
     override fun close() = conn.close()
+
+    private companion object {
+        /** Standard descriptor type CONFIGURATION. */
+        const val DT_CONFIGURATION = 2
+    }
 }

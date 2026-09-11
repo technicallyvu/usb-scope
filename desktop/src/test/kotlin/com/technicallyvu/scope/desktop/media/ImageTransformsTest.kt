@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.desktop.media
 
 import com.technicallyvu.scope.core.driver.FrameData
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -88,5 +89,15 @@ class ImageTransformsTest {
         assertEquals(8, ImageTransforms.decode(FrameData.Jpeg(jpegBytes))!!.width)
         assertEquals(4, ImageTransforms.decode(yuyv(4, 2, 128, 128, 128))!!.width)
         assertNull(ImageTransforms.decode(FrameData.Jpeg(byteArrayOf(1, 2))))
+    }
+
+    @Test
+    fun `decode with a denoiser handles the same jpeg twice`() {
+        val jpegBytes = ByteArrayOutputStream().also { ImageIO.write(BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB), "jpg", it) }.toByteArray()
+        val argbDenoiser = TemporalDenoiser()
+        val first = requireNotNull(ImageTransforms.decode(FrameData.Jpeg(jpegBytes), null, argbDenoiser))
+        val second = requireNotNull(ImageTransforms.decode(FrameData.Jpeg(jpegBytes), null, argbDenoiser))
+        assertEquals(8, first.width); assertEquals(8, first.height)
+        assertEquals(8, second.width); assertEquals(8, second.height)
     }
 }

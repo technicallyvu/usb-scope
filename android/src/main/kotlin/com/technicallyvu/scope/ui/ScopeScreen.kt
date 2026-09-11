@@ -27,6 +27,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,6 +47,15 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     // than crashing on a cast.
     val activity = LocalActivity.current
     val wide = if (activity == null) false else calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
+
+    // Remembered, not `vm::toggleTrust`: a method reference is a fresh instance on every
+    // recomposition, and this screen recomposes per frame, which would recompose all of
+    // TrustScreen (license text included) at the frame rate while it is open.
+    val onBack = remember(vm) { { vm.toggleTrust() } }
+    if (ui.showTrust) {
+        TrustScreen(onBack = onBack)
+        return
+    }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StatusBar(ui)
@@ -115,7 +125,11 @@ private fun Controls(ui: UiState, vm: ScopeViewModel, onRequestPermission: (UsbD
     Button(onClick = vm::toggleRecording, enabled = streaming) { Text(if (s.recording) "Stop" else "Record") }
     OutlinedButton(onClick = vm::rotate, enabled = !s.recording) { Text("Rotate (${s.rotation}°)") }
     OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
+    OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }
     OutlinedButton(onClick = vm::toggleStats) { Text(if (ui.showStats) "Hide stats" else "Stats") }
+    // Disabled while recording: the About screen replaces the live view, and with it the REC badge —
+    // the only on-screen sign that a clip is still being written.
+    OutlinedButton(onClick = vm::toggleTrust, enabled = !s.recording) { Text("About") }
     if (BuildConfig.DEBUG) {
         OutlinedButton(onClick = { if (ui.replaying) vm.stopReplay() else vm.startReplay() }) { Text(if (ui.replaying) "Stop replay" else "Replay fixture") }
     }

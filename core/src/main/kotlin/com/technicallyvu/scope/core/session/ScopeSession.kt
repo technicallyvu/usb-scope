@@ -2,8 +2,10 @@ package com.technicallyvu.scope.core.session
 
 import com.technicallyvu.scope.core.driver.DeviceDriver
 import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
@@ -36,6 +38,7 @@ data class SessionState(
     val stats: StreamStats = StreamStats(),
     val recording: Boolean = false,
     val lastSaved: String? = null,
+    val denoise: Boolean = true,
 )
 
 /**
@@ -47,12 +50,21 @@ interface FrameSink {
     fun onFrame(frame: Frame, state: SessionState)
     /** The cable button was pressed (debounced rising edge). */
     fun onButtonSnapshot()
+    /**
+     * A device just opened and the session has entered [ConnectionState.Streaming]; the next
+     * [onFrame] belongs to a new stream. Sinks that keep per-stream history (a decoded-frame
+     * denoiser, for instance) reset it here. Called once per successful open, on the session's
+     * worker thread, before any frame of that stream.
+     */
+    fun onStreamStarted() {}
 }
 
 /**
- * Platform-free session loop shared by shells: polls [devices], opens the first device a driver
- * claims, streams frames to [sink], and reconnects after errors. Owns rotation/mirror and the
- * recording flag (which locks them); the shell owns snapshot/recording implementations.
+ * Platform-free session loop shared by shells: polls [devices], opens a device some driver claims,
+ * streams frames to [sink], and reconnects after errors. Which device is tried on a given poll is
+ * [DeviceCandidates]' business — one that cannot work is skipped, one that failed is rotated past.
+ * Owns rotation/mirror and the recording flag (which locks them); the shell owns snapshot/recording
+ * implementations.
  */
 class ScopeSession(
     private val devices: DeviceSource,
@@ -67,18 +79,20 @@ class ScopeSession(
     val state: StateFlow<SessionState> = _state
 
     @Volatile private var job: Job? = null
+    @Volatile private var denoiser: TemporalDenoiser? = TemporalDenoiser()
     // The following are only ever read/written from the session coroutine (started in `start()`,
     // confined to `workDispatcher`), so they need no synchronization of their own.
     private var lastDriverId: String? = null
     private var prevButton = false
     private var lastButtonNanos: Long? = null
+    private val candidates = DeviceCandidates(drivers)
 
     fun start() {
         if (job != null) return
         job = scope.launch(workDispatcher) {
             while (isActive) {
                 try {
-                    val found = findDevice()
+                    val found = candidates.next(findCandidates())
                     if (found == null) {
                         _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck())) }
                     } else {
@@ -123,29 +137,49 @@ class ScopeSession(
     fun setRecording(active: Boolean) = _state.update { it.copy(recording = active) }
     fun markSaved(name: String) = _state.update { it.copy(lastSaved = name) }
 
-    private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
-        devices.list().firstNotNullOfOrNull { ref -> drivers.firstOrNull { it.matches(ref.info) }?.let { ref to it } }
+    fun setDenoise(enabled: Boolean) {
+        denoiser = if (enabled) TemporalDenoiser() else null
+        _state.update { it.copy(denoise = enabled) }
+    }
+
+    /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
+    private fun findCandidates(): List<Pair<DeviceRef, DeviceDriver>> = try {
+        candidates.candidates(devices.list())
     } catch (e: UsbException) {
-        null
+        emptyList()
     }
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
         _state.update { it.copy(connection = ConnectionState.Connecting(driver.displayName)) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
+        var opened = false
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            opened = true
+            candidates.onOpened(ref)
             // Only reset rotation/mirror to the driver default once the device has actually opened,
             // so a device that keeps failing to open does not wipe the user's rotation every poll.
             if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
             lastDriverId = driver.id
+            denoiser?.reset()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
+            // Same contract as onFrame: a throwing sink must not end the stream.
+            try {
+                sink.onStreamStarted()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // the sink owns its own error reporting
+            }
             val src = source
             src.frames.collect { frame -> onFrame(frame, src.stats.value) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: UsbException) {
+            // Only a failure to *open* rotates the cursor; a stream that ended keeps this device first.
+            if (!opened) candidates.onOpenFailed(ref, e)
             val wasStreaming = _state.value.connection is ConnectionState.Streaming
             _state.update {
                 it.copy(connection = if (wasStreaming) ConnectionState.NoDevice(false) else if (driverHintCheck()) ConnectionState.NoDevice(true) else ConnectionState.Failed(e.message ?: "USB error"))
@@ -162,9 +196,14 @@ class ScopeSession(
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
         _state.update { it.copy(stats = stats) }
+        val delivered = denoiser?.let { d ->
+            (frame.data as? FrameData.Yuyv422)?.let { yuv ->
+                Frame(d.apply(yuv), frame.timestampNanos, frame.buttonPressed, frame.cameraNumber, frame.sensorValue)
+            }
+        } ?: frame
         // Only Exception is swallowed (never Error, never cancellation): the shell owns its own error reporting.
         try {
-            sink.onFrame(frame, _state.value)
+            sink.onFrame(delivered, _state.value)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

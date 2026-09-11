@@ -13,8 +13,9 @@ android {
         applicationId = "com.technicallyvu.scope"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.2.0"
+        versionCode = 2
+        versionName = "0.3.0"
+        buildConfigField("String", "GIT_SHA", "\"${gitShortSha()}\"")
     }
 
     buildFeatures {
@@ -63,6 +64,15 @@ dependencies {
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
+
+// Build id shown on the trust/about screen so a bug report can be tied to an exact build.
+// --always falls back to the short commit hash when there is no tag to describe; --dirty appends
+// "-dirty" so a build made from an uncommitted working tree can never be mistaken for that commit.
+// Uses providers.exec (not Runtime.exec) so it participates correctly in configuration cache; falls
+// back to "unknown" when git isn't available (e.g. a source archive build) or the command fails.
+fun gitShortSha(): String = runCatching {
+    providers.exec { commandLine("git", "describe", "--always", "--dirty") }.standardOutput.asText.get().trim()
+}.getOrDefault("unknown")
 
 // Privacy gate: fail the build if any dependency drags in the INTERNET permission.
 androidComponents {

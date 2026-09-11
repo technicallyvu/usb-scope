@@ -14,6 +14,7 @@ import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.fixture.ReplayDeviceSource
 import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
 import com.technicallyvu.scope.core.image.ExifOrientation
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.session.ConnectionState
 import com.technicallyvu.scope.core.session.FrameSink
 import com.technicallyvu.scope.core.session.ScopeSession
@@ -41,6 +42,7 @@ data class UiState(
     val session: SessionState = SessionState(),
     val image: Bitmap? = null,
     val showStats: Boolean = false,
+    val showTrust: Boolean = false,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     val replaying: Boolean = false,
@@ -70,6 +72,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
      * [attach]) drops frames instead of racing the new one. Mutated only from [attach] on Main. */
     @Volatile private var currentSessionToken = 0L
     private var nextSessionToken = 0L
+    /** The sink of the current session, so main-thread actions can reach its per-stream state. */
+    @Volatile private var currentSink: SessionSink? = null
 
     init {
         attach(usbDevices, replaying = false)
@@ -88,12 +92,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         private var windowFrames = 0
         private var windowMaxGapMs = 0L
         private var windowProcessNanos = 0L
+        private val argbDenoiser = TemporalDenoiser()
 
         override fun onFrame(frame: Frame, state: SessionState) {
             if (token != currentSessionToken) return
             val t0 = System.nanoTime()
             lastFrame = frame.data
-            val bmp = bitmaps.toBitmap(frame.data) ?: return
+            val denoiser = if (state.denoise && frame.data is FrameData.Jpeg) argbDenoiser else null
+            val bmp = bitmaps.toBitmap(frame.data, denoiser) ?: return
             val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
             lastImage = shown
             synchronized(recorderLock) {
@@ -129,6 +135,25 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (token != currentSessionToken) return
             snapshot()
         }
+
+        /**
+         * A new stream: drop the ARGB denoiser's history so the first decoded JPEG frame of this
+         * device is never blended with the last frame of the previous one. (The YUV denoiser lives
+         * in [ScopeSession] and resets itself.)
+         */
+        override fun onStreamStarted() {
+            if (token != currentSessionToken) return
+            argbDenoiser.reset()
+        }
+
+        /**
+         * Drops the ARGB denoiser's history. Called from Main when denoise is switched back on, so
+         * the first filtered frame is not blended with whatever was on screen before the toggle
+         * (frames from the off period never reached the denoiser). [TemporalDenoiser.reset] only
+         * clears references, and the worker re-seeds them on its next frame, so racing it costs at
+         * worst one extra pass-through frame.
+         */
+        fun resetDenoisers() = argbDenoiser.reset()
     }
 
     /**
@@ -142,7 +167,9 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         stateJob?.cancel()
         val token = ++nextSessionToken
         currentSessionToken = token
-        val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = SessionSink(token, FrameBitmaps()))
+        val sink = SessionSink(token, FrameBitmaps())
+        currentSink = sink
+        val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = sink)
         session = newSession
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
@@ -170,6 +197,17 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun rotate() = session.rotate()
     fun toggleMirror() = session.toggleMirror()
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
+    fun toggleTrust() = _ui.update { it.copy(showTrust = !it.showTrust) }
+    /**
+     * Re-enabling starts from a clean slate. [ScopeSession.setDenoise] builds a fresh YUV denoiser
+     * on its own; the shell's ARGB one (for decoded JPEG frames) lives in the sink and is reset
+     * here, otherwise the first filtered frame would blend with a picture from before the toggle.
+     */
+    fun toggleDenoise() {
+        val enabled = !session.state.value.denoise
+        if (enabled) currentSink?.resetDenoisers()
+        session.setDenoise(enabled)
+    }
 
     fun snapshot() {
         // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
@@ -181,14 +219,18 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".jpg"
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                when (data) {
+                when {
+                    // A snapshot saves what the user sees. With denoise on that is the filtered
+                    // picture, which only exists as pixels, so both frame kinds go through the
+                    // bitmap (re-encoded JPEG at quality 92, rotation/mirror already baked in).
+                    s.denoise -> saver.saveBitmapJpeg(shown, name)
                     // Original bytes plus an EXIF orientation tag: no re-encode, no quality loss.
-                    is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
+                    data is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
                     // Compress the bitmap the user is looking at. Never re-convert: FrameBitmaps
-                    // reuses its pixel buffer for the worker's next frame. Bitmaps out of
-                    // Bitmap.createBitmap are immutable, so compressing here while the worker
-                    // moves on is safe.
-                    is FrameData.Yuyv422 -> saver.saveBitmapJpeg(shown, name)
+                    // reuses its pixel buffer for the worker's next frame. Every bitmap handed to
+                    // the UI is freshly allocated per frame and never written to again once
+                    // published, so compressing here while the worker moves on is safe.
+                    else -> saver.saveBitmapJpeg(shown, name)
                 }
             }.onSuccess { session.markSaved(name) }
              .onFailure { e -> _ui.update { it.copy(message = "Snapshot failed: ${e.message}") } }

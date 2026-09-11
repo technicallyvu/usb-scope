@@ -13,4 +13,11 @@ interface UsbConnection : AutoCloseable {
      */
     fun bulkTransfer(endpoint: Int, buffer: ByteArray, length: Int, timeoutMs: Int): Int
     fun controlTransfer(requestType: Int, request: Int, value: Int, index: Int, buffer: ByteArray?, length: Int, timeoutMs: Int): Int
+
+    /**
+     * The device's raw descriptors as the kernel already read them: the 18-byte device descriptor
+     * followed by the configuration descriptor(s). Null when the platform cannot supply them, in
+     * which case the caller falls back to GET_DESCRIPTOR control transfers.
+     */
+    fun rawDescriptors(): ByteArray?
 }

@@ -5,6 +5,8 @@ import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.TemporalDenoiser
+import com.technicallyvu.scope.core.session.DeviceCandidates
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbException
@@ -49,6 +51,7 @@ data class UiState(
     val recording: Boolean = false,
     val showDebug: Boolean = false,
     val lastSaved: String? = null,
+    val denoise: Boolean = true,
 )
 
 /**
@@ -78,14 +81,18 @@ class ScopeViewModel(
     private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
+    @Volatile private var yuvDenoiser: TemporalDenoiser? = null
+    @Volatile private var argbDenoiser: TemporalDenoiser? = null
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
     private var lastDriverId: String? = null
+    /** Which attached device to try next: skips what can never open, rotates past what just failed. */
+    private val candidates = DeviceCandidates(drivers)
 
     fun start() {
         if (job != null) return
         job = scope.launch(Dispatchers.Default) {
             while (isActive) {
-                val found = findDevice()
+                val found = candidates.next(findCandidates())
                 if (found == null) {
                     _state.update { it.copy(connection = ConnectionState.NoDevice(driverHintCheck()), image = null) }
                 } else {
@@ -105,11 +112,16 @@ class ScopeViewModel(
         runBlocking { withTimeoutOrNull(timeoutMillis) { j.join() } }
     }
 
+    /**
+     * Saves what the user sees. With denoise on that is the filtered picture, which only exists as
+     * decoded pixels, so the shown image is re-encoded (rotation/mirror already baked in); with
+     * denoise off a JPEG frame keeps its original bytes and an EXIF orientation tag.
+     */
     fun snapshot() {
-        val data = lastFrame ?: return
         val s = _state.value
         val path = try {
-            SnapshotWriter.write(data, s.rotation, s.mirror, s.outputDir)
+            if (s.denoise) SnapshotWriter.write(lastImage ?: return, s.outputDir)
+            else SnapshotWriter.write(lastFrame ?: return, s.rotation, s.mirror, s.outputDir)
         } catch (e: Exception) {
             System.err.println("Snapshot failed: ${e.message}")
             return
@@ -162,12 +174,20 @@ class ScopeViewModel(
 
     fun toggleDebug() = _state.update { it.copy(showDebug = !it.showDebug) }
 
+    /** Re-enabling starts from a clean slate: the stale history is from before the toggle-off. */
+    fun toggleDenoise() {
+        val enabled = !_state.value.denoise
+        if (enabled) { yuvDenoiser?.reset(); argbDenoiser?.reset() }
+        _state.update { it.copy(denoise = enabled) }
+    }
+
     fun setOutputDir(dir: Path) = _state.update { it.copy(outputDir = dir) }
 
-    private fun findDevice(): Pair<DeviceRef, DeviceDriver>? = try {
-        devices.list().firstNotNullOfOrNull { ref -> drivers.firstOrNull { it.matches(ref.info) }?.let { ref to it } }
+    /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
+    private fun findCandidates(): List<Pair<DeviceRef, DeviceDriver>> = try {
+        candidates.candidates(devices.list())
     } catch (e: UsbException) {
-        null
+        emptyList()
     }
 
     private suspend fun session(ref: DeviceRef, driver: DeviceDriver) {
@@ -175,9 +195,14 @@ class ScopeViewModel(
         if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation) }
         var transport: UsbTransport? = null
         var source: FrameSource? = null
+        var opened = false
         try {
             transport = devices.open(ref)
             source = driver.open(transport)
+            opened = true
+            candidates.onOpened(ref)
+            yuvDenoiser = TemporalDenoiser()
+            argbDenoiser = TemporalDenoiser()
             _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
             lastDriverId = driver.id
             val src = source
@@ -185,6 +210,8 @@ class ScopeViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: UsbException) {
+            // Only a failure to *open* rotates the cursor; a stream that ended keeps this device first.
+            if (!opened) candidates.onOpenFailed(ref, e)
             val wasStreaming = _state.value.connection is ConnectionState.Streaming
             _state.update {
                 it.copy(
@@ -210,8 +237,8 @@ class ScopeViewModel(
     }
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
-        val decoded = ImageTransforms.decode(frame.data) ?: return
         val s = _state.value
+        val decoded = ImageTransforms.decode(frame.data, if (s.denoise) yuvDenoiser else null, if (s.denoise) argbDenoiser else null) ?: return
         val shown = ImageTransforms.apply(decoded, s.rotation, s.mirror)
         lastFrame = frame.data
         lastImage = shown

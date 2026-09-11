@@ -17,7 +17,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,6 +35,8 @@ import javax.swing.JFileChooser
 @Composable
 fun ScopeScreen(vm: ScopeViewModel) {
     val s by vm.state.collectAsState()
+    var showAbout by remember { mutableStateOf(false) }
+    if (showAbout) AboutDialog(onClose = { showAbout = false })
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StatusBar(s.connection)
         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -46,7 +50,7 @@ fun ScopeScreen(vm: ScopeViewModel) {
             if (s.showDebug) DebugOverlay(s.stats, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (s.recording) Badge("REC", Color(0xFFD32F2F), Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
-        Controls(s, vm)
+        Controls(s, vm, onAbout = { showAbout = true })
     }
 }
 
@@ -92,7 +96,7 @@ private fun Badge(text: String, color: Color, modifier: Modifier) {
 }
 
 @Composable
-private fun Controls(s: UiState, vm: ScopeViewModel) {
+private fun Controls(s: UiState, vm: ScopeViewModel, onAbout: () -> Unit) {
     val streaming = s.image != null
     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -100,7 +104,9 @@ private fun Controls(s: UiState, vm: ScopeViewModel) {
             Button(onClick = vm::toggleRecording, enabled = streaming) { Text(if (s.recording) "Stop" else "Record") }
             OutlinedButton(onClick = vm::rotate, enabled = !s.recording) { Text("Rotate (${s.rotation}°)") }
             OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
+            OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }
             OutlinedButton(onClick = vm::toggleDebug) { Text(if (s.showDebug) "Hide stats" else "Stats") }
+            OutlinedButton(onClick = onAbout) { Text("About") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { chooseFolder(s.outputDir)?.let(vm::setOutputDir) }) { Text("Folder…") }
