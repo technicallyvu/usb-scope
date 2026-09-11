@@ -135,7 +135,7 @@ private fun Controls(ui: UiState, vm: ScopeViewModel, onRequestPermission: (UsbD
     val s = ui.session
     ui.permissionDevice?.let { dev -> Button(onClick = { onRequestPermission(dev) }) { Text("Allow USB access") } }
     Button(onClick = vm::snapshot, enabled = streaming) { Text("Snapshot") }
-    Button(onClick = vm::toggleRecording, enabled = streaming) { Text(if (s.recording) "Stop" else "Record") }
+    Button(onClick = { vm.toggleRecording() }, enabled = streaming) { Text(if (s.recording) "Stop" else "Record") }
     OutlinedButton(onClick = vm::rotate, enabled = !s.recording) { Text("Rotate (${s.rotation}°)") }
     OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
     OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }

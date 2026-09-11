@@ -77,13 +77,6 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionToken = 0L
     /** The sink of the current session, so main-thread actions can reach its per-stream state. */
     @Volatile private var currentSink: SessionSink? = null
-    /**
-     * Set (on the session's worker thread) right before a double-press asks [toggleRecording] to
-     * flip recording, so the Main-thread state collector knows the *next* recording-state change it
-     * observes was requested by the button and should get a "Recording started/stopped" message
-     * rather than staying silent (as a rotate-triggered stop, say, would).
-     */
-    @Volatile private var buttonInitiatedToggle = false
 
     init {
         attach(usbDevices, replaying = false)
@@ -150,8 +143,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         override fun onButtonRecordToggle() {
             if (token != currentSessionToken) return
             _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
-            buttonInitiatedToggle = true
-            viewModelScope.launch { toggleRecording() }
+            viewModelScope.launch { toggleRecording(fromButton = true) }
         }
 
         /**
@@ -191,29 +183,17 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         session = newSession
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
-        var wasRecording = false
         stateJob = viewModelScope.launch {
             newSession.state.collect { s ->
                 val streaming = s.connection is ConnectionState.Streaming
                 // Anything but Streaming means the last frame is stale (unplug, error, reconnect):
                 // drop it so the view falls back to its status text instead of a frozen picture.
                 if (!streaming) { lastImage = null; lastFrame = null }
-                // Only a recording flip the button itself asked for gets a "Recording started/
-                // stopped" message; any other change (rotate's lock, a reconnect, a save failure)
-                // stays silent. Computed once here, not inside _ui.update, since that lambda can be
-                // re-invoked under contention and must stay free of side effects.
-                val recordingChanged = s.recording != wasRecording
-                wasRecording = s.recording
-                val buttonMessage = if (recordingChanged && buttonInitiatedToggle) {
-                    buttonInitiatedToggle = false
-                    if (s.recording) "Recording started" else "Recording stopped"
-                } else null
                 _ui.update {
                     it.copy(
                         session = s,
                         image = if (streaming) it.image else null,
                         permissionDevice = if (!replaying && s.connection is ConnectionState.Failed) usbDevices.pendingPermission else null,
-                        message = buttonMessage ?: it.message,
                     )
                 }
                 // Off the main thread: stopping the recorder takes recorderLock and calls into
@@ -274,7 +254,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
      */
     @Volatile private var recordingTransition = false
 
-    fun toggleRecording() {
+    /**
+     * @param fromButton true when this toggle was requested by the cable button (as opposed to the
+     * on-screen Record button), in which case the resulting start/stop gets a transient
+     * "Recording started/stopped" message; the on-screen button already shows its own state and
+     * stays silent.
+     */
+    fun toggleRecording(fromButton: Boolean = false) {
         if (recordingTransition) return
         val active = recorder != null
         recordingTransition = true
@@ -282,7 +268,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         // construction); keep all of it off the main thread.
         if (active) {
             viewModelScope.launch(Dispatchers.IO) {
-                try { stopRecordingIfActive() } finally { recordingTransition = false }
+                try { stopRecordingIfActive(fromButton) } finally { recordingTransition = false }
             }
             return
         }
@@ -303,6 +289,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // the recording that was just started.
                     session.setRecording(true)
                 }
+                if (fromButton) _ui.update { it.copy(message = "Recording started") }
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
             } finally {
                 recordingTransition = false
@@ -310,9 +297,10 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun stopRecordingIfActive() = synchronized(recorderLock) { stopRecordingLocked(keep = true) }
+    private fun stopRecordingIfActive(fromButton: Boolean = false) =
+        synchronized(recorderLock) { stopRecordingLocked(keep = true, fromButton = fromButton) }
 
-    private fun stopRecordingLocked(keep: Boolean) {
+    private fun stopRecordingLocked(keep: Boolean, fromButton: Boolean = false) {
         val rec = recorder ?: return
         val video = pendingVideo
         recorder = null
@@ -327,6 +315,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (kept) session.markSaved(video.displayName)
         }
         session.setRecording(false)
+        if (fromButton) _ui.update { it.copy(message = "Recording stopped") }
     }
 
     // ---- USB events from the activity ----

@@ -40,7 +40,12 @@ hardware). Denoise and the trust screen await Anthony's look on the phone the ne
   also fires a haptic tick on every button event, but deliberately without the `VIBRATE` permission:
   `LocalHapticFeedback.current.performHapticFeedback(HapticFeedbackType.LongPress)` from Compose
   needs none, so a `hapticTick: Long` counter in `UiState` (bumped by the view model on each event)
-  drives a `LaunchedEffect(ui.hapticTick)` in `ScopeScreen` that skips its own initial value.
+  drives a `LaunchedEffect(ui.hapticTick)` in `ScopeScreen` that skips its own initial value. The
+  toggle also shows a transient "Recording started"/"Recording stopped" message, but only when the
+  button caused it: Android's `toggleRecording(fromButton = true)` and desktop's `toggleRecording()`
+  return value (true when a recording actually started or stopped) both attribute the message to the
+  press that caused it rather than to some other recording-state change, such as a save failure or a
+  rotate-triggered stop.
 
 - **The About screen is disabled while recording.** It replaces the live view, and with it the REC
   badge — the only on-screen sign that a clip is still being written.
