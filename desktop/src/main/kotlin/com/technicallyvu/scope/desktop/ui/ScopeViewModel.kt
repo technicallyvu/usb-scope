@@ -81,6 +81,13 @@ class ScopeViewModel(
     private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
+    /**
+     * Timestamp of an unconsumed single press: set when a press takes a snapshot, cleared once a
+     * second press within [DOUBLE_PRESS_WINDOW_NANOS] consumes it as a recording toggle (or once a
+     * press outside the window replaces it with a new pending press of its own). Mirrors
+     * ScopeSession's core double-press logic for the shell that has not yet adopted it.
+     */
+    private var lastPressNanos: Long? = null
     @Volatile private var yuvDenoiser: TemporalDenoiser? = null
     @Volatile private var argbDenoiser: TemporalDenoiser? = null
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
@@ -233,6 +240,7 @@ class ScopeViewModel(
             lastFrame = null
             lastImage = null
             prevButton = false
+            lastPressNanos = null
         }
     }
 
@@ -254,7 +262,16 @@ class ScopeViewModel(
         }
         if (frame.buttonPressed && !prevButton && frame.timestampNanos - lastButtonSnapNanos > BUTTON_DEBOUNCE_NANOS) {
             lastButtonSnapNanos = frame.timestampNanos
-            snapshot()
+            val prevPress = lastPressNanos
+            if (prevPress != null && frame.timestampNanos - prevPress <= DOUBLE_PRESS_WINDOW_NANOS) {
+                // Second press of a pair: the first already took its snapshot, this one toggles.
+                lastPressNanos = null
+                toggleRecording()
+                _state.update { it.copy(lastSaved = if (it.recording) "Recording started" else "Recording stopped") }
+            } else {
+                lastPressNanos = frame.timestampNanos
+                snapshot()
+            }
         }
         prevButton = frame.buttonPressed
         _state.update { it.copy(image = shown, stats = stats) }
@@ -271,6 +288,8 @@ class ScopeViewModel(
 
     companion object {
         const val BUTTON_DEBOUNCE_NANOS = 300_000_000L
+        /** A second press within this long of the first toggles recording instead of snapshotting again. */
+        const val DOUBLE_PRESS_WINDOW_NANOS = 1_500_000_000L
         val FILE_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }

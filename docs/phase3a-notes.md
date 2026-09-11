@@ -29,6 +29,19 @@ hardware). Denoise and the trust screen await Anthony's look on the phone the ne
   without it, the first decoded JPEG frame of a new device would blend with the last frame of the
   previous one. The YUV denoiser lives in `ScopeSession` and resets itself.
 
+- **Cable button: one gesture, one code, ~0.5 s threshold.** The endoscope's cable button emits
+  exactly one debounced press event per deliberate hold (quick flicks emit nothing) and it is always
+  the same code -- there is no separate "record" button to bind to. A single press still snapshots,
+  unchanged. A second press within `ScopeSession.DOUBLE_PRESS_WINDOW_NANOS` (1.5 s) of the first
+  toggles recording instead of taking a second snapshot; the first press's snapshot always happens,
+  and a third press starts a fresh pair rather than being swallowed by the one that just toggled.
+  `FrameSink.onButtonRecordToggle()` (default no-op) carries the second-press event; the desktop
+  shell mirrors the same window logic locally since it has not yet adopted `ScopeSession`. Android
+  also fires a haptic tick on every button event, but deliberately without the `VIBRATE` permission:
+  `LocalHapticFeedback.current.performHapticFeedback(HapticFeedbackType.LongPress)` from Compose
+  needs none, so a `hapticTick: Long` counter in `UiState` (bumped by the view model on each event)
+  drives a `LaunchedEffect(ui.hapticTick)` in `ScopeScreen` that skips its own initial value.
+
 - **The About screen is disabled while recording.** It replaces the live view, and with it the REC
   badge — the only on-screen sign that a clip is still being written.
 

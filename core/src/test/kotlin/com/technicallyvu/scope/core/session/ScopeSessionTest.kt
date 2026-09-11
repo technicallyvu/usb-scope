@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 class ScopeSessionTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -95,6 +96,7 @@ class ScopeSessionTest {
 
     private class CountingSink : FrameSink {
         val frames = AtomicInteger(); val buttons = AtomicInteger(); val starts = AtomicInteger()
+        val toggles = AtomicInteger()
         @Volatile var lastState: SessionState? = null
         @Volatile var lastFrame: Frame? = null
         @Volatile var frameBeforeStart = false
@@ -103,6 +105,7 @@ class ScopeSessionTest {
             frames.incrementAndGet(); lastState = state; lastFrame = frame
         }
         override fun onButtonSnapshot() { buttons.incrementAndGet() }
+        override fun onButtonRecordToggle() { toggles.incrementAndGet() }
         override fun onStreamStarted() { starts.incrementAndGet() }
     }
 
@@ -120,6 +123,21 @@ class ScopeSessionTest {
 
     private fun session(devices: DeviceSource, sink: FrameSink, hint: () -> Boolean = { false }) =
         ScopeSession(devices, listOf(I4seasonYuvDriver(ioDispatcher = Dispatchers.Default)), scope, sink, driverHintCheck = hint, pollMillis = 50)
+
+    /**
+     * A stream whose chunks are exactly one frame's worth of bytes ([FRAME_BYTES]), so each
+     * [ReplayTransport.bulkRead] emits exactly one frame and therefore one [clock] tick -- letting a
+     * test place button presses at exact, controlled gaps regardless of real elapsed time.
+     */
+    private fun frameSizedStream(frames: Int, buttonOn: Set<Int>): ReplayTransport {
+        val bytes = (1..frames).fold(ByteArray(0)) { acc, i -> acc + I4seasonTestFrames.frame(4, 2, flags = if (i in buttonOn) 0x02 else 0) }
+        return ReplayTransport(I4seasonTestFrames.chunked(bytes, FRAME_BYTES), sleep = Thread::sleep, videoEndpoint = I4seasonYuvDriver.EP_IN).apply {
+            controlResponses[0xA0 to 0x00] = I4seasonTestFrames.info(4, 2)
+        }
+    }
+
+    private fun sessionWithClock(devices: DeviceSource, sink: FrameSink, clock: () -> Long) =
+        ScopeSession(devices, listOf(I4seasonYuvDriver(clock = clock, ioDispatcher = Dispatchers.Default)), scope, sink, pollMillis = 50)
 
     @AfterEach fun tearDown() {
         stuckLatch.countDown()
@@ -158,6 +176,60 @@ class ScopeSessionTest {
         devices.refs = emptyList()
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
         assertEquals(1, sink.buttons.get())
+        s.stop()
+    }
+
+    @Test
+    fun `two presses within the window snapshot once then toggle recording`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val counter = AtomicLong(0)
+        val clock = { counter.getAndAdd(FRAME_NANOS) }
+        // Frames 66 ms apart; a press at frame 1 and another 8 frames later (~528 ms) is well inside
+        // the 1.5 s double-press window.
+        val devices = FakeDevices(listOf(ref)) { frameSizedStream(12, buttonOn = setOf(1, 9)) }
+        val s = sessionWithClock(devices, sink, clock)
+        s.start()
+        withTimeout(5_000) { while (sink.toggles.get() < 1) kotlinx.coroutines.delay(10) }
+        devices.refs = emptyList()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        assertEquals(1, sink.buttons.get(), "the first press should still take its snapshot")
+        assertEquals(1, sink.toggles.get(), "the second press should toggle recording, not snapshot again")
+        s.stop()
+    }
+
+    @Test
+    fun `two presses outside the window snapshot twice and never toggle`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val counter = AtomicLong(0)
+        val clock = { counter.getAndAdd(FRAME_NANOS) }
+        // A press at frame 1 and another 46 frames later (~3.0 s) is well outside the 1.5 s window.
+        val devices = FakeDevices(listOf(ref)) { frameSizedStream(50, buttonOn = setOf(1, 47)) }
+        val s = sessionWithClock(devices, sink, clock)
+        s.start()
+        withTimeout(5_000) { while (sink.buttons.get() < 2) kotlinx.coroutines.delay(10) }
+        devices.refs = emptyList()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        assertEquals(2, sink.buttons.get(), "two isolated presses should each take a snapshot")
+        assertEquals(0, sink.toggles.get(), "presses this far apart must never toggle recording")
+        s.stop()
+    }
+
+    @Test
+    fun `a third press starts a new pair after the first pair toggled`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val counter = AtomicLong(0)
+        val clock = { counter.getAndAdd(FRAME_NANOS) }
+        // Presses at frame 1, 9 and 17: ~528 ms apart each, all inside the window. The first pair
+        // (1, 9) snapshots then toggles; the third press (17) starts a fresh pair of its own and
+        // snapshots again rather than toggling back off.
+        val devices = FakeDevices(listOf(ref)) { frameSizedStream(20, buttonOn = setOf(1, 9, 17)) }
+        val s = sessionWithClock(devices, sink, clock)
+        s.start()
+        withTimeout(5_000) { while (sink.buttons.get() < 2) kotlinx.coroutines.delay(10) }
+        devices.refs = emptyList()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        assertEquals(2, sink.buttons.get(), "presses 1 and 3 should each snapshot")
+        assertEquals(1, sink.toggles.get(), "press 2 should toggle recording exactly once")
         s.stop()
     }
 
@@ -380,5 +452,9 @@ class ScopeSessionTest {
     private companion object {
         const val FILL_A: Byte = 100
         const val FILL_B: Byte = 103
+        /** Header (511) + a 4x2 YUYV payload (16): exactly one [I4seasonTestFrames.frame]'s size. */
+        const val FRAME_BYTES = 511 + 4 * 2 * 2
+        /** ~15 fps, matching the real driver's typical frame spacing. */
+        const val FRAME_NANOS = 66_000_000L
     }
 }

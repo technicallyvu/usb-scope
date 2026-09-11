@@ -25,14 +25,19 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.core.driver.StreamStats
@@ -55,6 +60,14 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     if (ui.showTrust) {
         TrustScreen(onBack = onBack)
         return
+    }
+
+    // A haptic tick on every cable-button press (single or double). The view model bumps
+    // ui.hapticTick on each button event; the initial value must not itself buzz on screen entry.
+    val haptic = LocalHapticFeedback.current
+    var sawFirstTick by remember { mutableStateOf(false) }
+    LaunchedEffect(ui.hapticTick) {
+        if (sawFirstTick) haptic.performHapticFeedback(HapticFeedbackType.LongPress) else sawFirstTick = true
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {

@@ -46,6 +46,9 @@ data class UiState(
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     val replaying: Boolean = false,
+    /** Bumped on every cable-button event (snapshot or double-press toggle) so the screen can fire
+     * a haptic tick via a `LaunchedEffect(ui.hapticTick)`; the initial value must not itself buzz. */
+    val hapticTick: Long = 0L,
 )
 
 class ScopeViewModel(app: Application) : AndroidViewModel(app) {
@@ -74,6 +77,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionToken = 0L
     /** The sink of the current session, so main-thread actions can reach its per-stream state. */
     @Volatile private var currentSink: SessionSink? = null
+    /**
+     * Set (on the session's worker thread) right before a double-press asks [toggleRecording] to
+     * flip recording, so the Main-thread state collector knows the *next* recording-state change it
+     * observes was requested by the button and should get a "Recording started/stopped" message
+     * rather than staying silent (as a rotate-triggered stop, say, would).
+     */
+    @Volatile private var buttonInitiatedToggle = false
 
     init {
         attach(usbDevices, replaying = false)
@@ -133,7 +143,15 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onButtonSnapshot() {
             if (token != currentSessionToken) return
+            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
             snapshot()
+        }
+
+        override fun onButtonRecordToggle() {
+            if (token != currentSessionToken) return
+            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            buttonInitiatedToggle = true
+            viewModelScope.launch { toggleRecording() }
         }
 
         /**
@@ -173,17 +191,29 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         session = newSession
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
+        var wasRecording = false
         stateJob = viewModelScope.launch {
             newSession.state.collect { s ->
                 val streaming = s.connection is ConnectionState.Streaming
                 // Anything but Streaming means the last frame is stale (unplug, error, reconnect):
                 // drop it so the view falls back to its status text instead of a frozen picture.
                 if (!streaming) { lastImage = null; lastFrame = null }
+                // Only a recording flip the button itself asked for gets a "Recording started/
+                // stopped" message; any other change (rotate's lock, a reconnect, a save failure)
+                // stays silent. Computed once here, not inside _ui.update, since that lambda can be
+                // re-invoked under contention and must stay free of side effects.
+                val recordingChanged = s.recording != wasRecording
+                wasRecording = s.recording
+                val buttonMessage = if (recordingChanged && buttonInitiatedToggle) {
+                    buttonInitiatedToggle = false
+                    if (s.recording) "Recording started" else "Recording stopped"
+                } else null
                 _ui.update {
                     it.copy(
                         session = s,
                         image = if (streaming) it.image else null,
                         permissionDevice = if (!replaying && s.connection is ConnectionState.Failed) usbDevices.pendingPermission else null,
+                        message = buttonMessage ?: it.message,
                     )
                 }
                 // Off the main thread: stopping the recorder takes recorderLock and calls into
