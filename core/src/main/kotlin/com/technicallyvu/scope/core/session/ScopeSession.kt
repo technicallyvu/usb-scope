@@ -51,6 +51,13 @@ interface FrameSink {
     /** The cable button was pressed (debounced rising edge). */
     fun onButtonSnapshot()
     /**
+     * A second cable-button press landed within [ScopeSession.DOUBLE_PRESS_WINDOW_NANOS] of the
+     * first (debounced rising edge); the first press already took its snapshot via
+     * [onButtonSnapshot], this one toggles recording instead. Default no-op for sinks that don't
+     * support recording.
+     */
+    fun onButtonRecordToggle() {}
+    /**
      * A device just opened and the session has entered [ConnectionState.Streaming]; the next
      * [onFrame] belongs to a new stream. Sinks that keep per-stream history (a decoded-frame
      * denoiser, for instance) reset it here. Called once per successful open, on the session's
@@ -85,6 +92,12 @@ class ScopeSession(
     private var lastDriverId: String? = null
     private var prevButton = false
     private var lastButtonNanos: Long? = null
+    /**
+     * Timestamp of an unconsumed single press: set when a press takes a snapshot, cleared once a
+     * second press within [DOUBLE_PRESS_WINDOW_NANOS] consumes it as a toggle (or once a press
+     * outside the window replaces it with a new pending press of its own).
+     */
+    private var lastPressNanos: Long? = null
     private val candidates = DeviceCandidates(drivers)
 
     fun start() {
@@ -191,6 +204,8 @@ class ScopeSession(
             source?.let { runCatching { it.close() } }
             if (source == null) transport?.let { runCatching { it.close() } }
             prevButton = false
+            lastButtonNanos = null
+            lastPressNanos = null
         }
     }
 
@@ -212,12 +227,26 @@ class ScopeSession(
         val last = lastButtonNanos
         if (frame.buttonPressed && !prevButton && (last == null || frame.timestampNanos - last > BUTTON_DEBOUNCE_NANOS)) {
             lastButtonNanos = frame.timestampNanos
-            try {
-                sink.onButtonSnapshot()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // drop the button event and keep streaming
+            val prevPress = lastPressNanos
+            if (prevPress != null && frame.timestampNanos - prevPress <= DOUBLE_PRESS_WINDOW_NANOS) {
+                // Second press of a pair: the first already took its snapshot, this one toggles.
+                lastPressNanos = null
+                try {
+                    sink.onButtonRecordToggle()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // drop the button event and keep streaming
+                }
+            } else {
+                lastPressNanos = frame.timestampNanos
+                try {
+                    sink.onButtonSnapshot()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // drop the button event and keep streaming
+                }
             }
         }
         prevButton = frame.buttonPressed
@@ -225,5 +254,7 @@ class ScopeSession(
 
     companion object {
         const val BUTTON_DEBOUNCE_NANOS = 300_000_000L
+        /** A second press within this long of the first toggles recording instead of snapshotting again. */
+        const val DOUBLE_PRESS_WINDOW_NANOS = 1_500_000_000L
     }
 }

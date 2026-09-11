@@ -46,6 +46,9 @@ data class UiState(
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     val replaying: Boolean = false,
+    /** Bumped on every cable-button event (snapshot or double-press toggle) so the screen can fire
+     * a haptic tick via a `LaunchedEffect(ui.hapticTick)`; the initial value must not itself buzz. */
+    val hapticTick: Long = 0L,
 )
 
 class ScopeViewModel(app: Application) : AndroidViewModel(app) {
@@ -133,7 +136,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onButtonSnapshot() {
             if (token != currentSessionToken) return
+            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
             snapshot()
+        }
+
+        override fun onButtonRecordToggle() {
+            if (token != currentSessionToken) return
+            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            viewModelScope.launch { toggleRecording(fromButton = true) }
         }
 
         /**
@@ -244,7 +254,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
      */
     @Volatile private var recordingTransition = false
 
-    fun toggleRecording() {
+    /**
+     * @param fromButton true when this toggle was requested by the cable button (as opposed to the
+     * on-screen Record button), in which case the resulting start/stop gets a transient
+     * "Recording started/stopped" message; the on-screen button already shows its own state and
+     * stays silent.
+     */
+    fun toggleRecording(fromButton: Boolean = false) {
         if (recordingTransition) return
         val active = recorder != null
         recordingTransition = true
@@ -252,7 +268,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         // construction); keep all of it off the main thread.
         if (active) {
             viewModelScope.launch(Dispatchers.IO) {
-                try { stopRecordingIfActive() } finally { recordingTransition = false }
+                try { stopRecordingIfActive(fromButton) } finally { recordingTransition = false }
             }
             return
         }
@@ -273,6 +289,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // the recording that was just started.
                     session.setRecording(true)
                 }
+                if (fromButton) _ui.update { it.copy(message = "Recording started") }
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
             } finally {
                 recordingTransition = false
@@ -280,9 +297,10 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun stopRecordingIfActive() = synchronized(recorderLock) { stopRecordingLocked(keep = true) }
+    private fun stopRecordingIfActive(fromButton: Boolean = false) =
+        synchronized(recorderLock) { stopRecordingLocked(keep = true, fromButton = fromButton) }
 
-    private fun stopRecordingLocked(keep: Boolean) {
+    private fun stopRecordingLocked(keep: Boolean, fromButton: Boolean = false) {
         val rec = recorder ?: return
         val video = pendingVideo
         recorder = null
@@ -297,6 +315,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (kept) session.markSaved(video.displayName)
         }
         session.setRecording(false)
+        if (fromButton) _ui.update { it.copy(message = "Recording stopped") }
     }
 
     // ---- USB events from the activity ----

@@ -81,6 +81,13 @@ class ScopeViewModel(
     private var recorderGeneration = 0L
     @Volatile private var prevButton = false
     private var lastButtonSnapNanos = Long.MIN_VALUE / 2
+    /**
+     * Timestamp of an unconsumed single press: set when a press takes a snapshot, cleared once a
+     * second press within [DOUBLE_PRESS_WINDOW_NANOS] consumes it as a recording toggle (or once a
+     * press outside the window replaces it with a new pending press of its own). Mirrors
+     * ScopeSession's core double-press logic for the shell that has not yet adopted it.
+     */
+    private var lastPressNanos: Long? = null
     @Volatile private var yuvDenoiser: TemporalDenoiser? = null
     @Volatile private var argbDenoiser: TemporalDenoiser? = null
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
@@ -129,37 +136,39 @@ class ScopeViewModel(
         _state.update { it.copy(lastSaved = path.fileName.toString()) }
     }
 
-    fun toggleRecording() {
+    /** @return true when this call actually started or stopped a recording (false on a no-op or failure). */
+    fun toggleRecording(): Boolean {
         val generation = synchronized(recorderLock) {
             if (recorder != null) {          // lost a race with another start; keep the existing one
                 stopRecordingLocked()
-                return
+                return true
             }
             recorderGeneration
         }
-        val img = lastImage ?: return
+        val img = lastImage ?: return false
         val s = _state.value
         val file = try {
             Files.createDirectories(s.outputDir)
             s.outputDir.resolve("SCOPE_" + LocalDateTime.now().format(FILE_STAMP) + ".mp4")
         } catch (e: Exception) {
             System.err.println("Recording could not start: ${e.message}")
-            return
+            return false
         }
         val created = try {
             recorderFactory(file, img.width, img.height)
         } catch (e: Throwable) {
             System.err.println("Recording could not start: ${e.message}")
-            return
+            return false
         }
         synchronized(recorderLock) {
             if (recorder != null || recorderGeneration != generation) {
                 runCatching { created.close() }   // a concurrent start or stop won; discard ours
-                return
+                return false
             }
             recorder = created
         }
         _state.update { it.copy(recording = true, lastSaved = file.fileName.toString()) }
+        return true
     }
 
     fun rotate() {
@@ -233,6 +242,7 @@ class ScopeViewModel(
             lastFrame = null
             lastImage = null
             prevButton = false
+            lastPressNanos = null
         }
     }
 
@@ -254,7 +264,18 @@ class ScopeViewModel(
         }
         if (frame.buttonPressed && !prevButton && frame.timestampNanos - lastButtonSnapNanos > BUTTON_DEBOUNCE_NANOS) {
             lastButtonSnapNanos = frame.timestampNanos
-            snapshot()
+            val prevPress = lastPressNanos
+            if (prevPress != null && frame.timestampNanos - prevPress <= DOUBLE_PRESS_WINDOW_NANOS) {
+                // Second press of a pair: the first already took its snapshot, this one toggles.
+                lastPressNanos = null
+                if (toggleRecording()) {
+                    val recording = _state.value.recording
+                    _state.update { it.copy(lastSaved = if (recording) "Recording started" else "Recording stopped") }
+                }
+            } else {
+                lastPressNanos = frame.timestampNanos
+                snapshot()
+            }
         }
         prevButton = frame.buttonPressed
         _state.update { it.copy(image = shown, stats = stats) }
@@ -271,6 +292,8 @@ class ScopeViewModel(
 
     companion object {
         const val BUTTON_DEBOUNCE_NANOS = 300_000_000L
+        /** A second press within this long of the first toggles recording instead of snapshotting again. */
+        const val DOUBLE_PRESS_WINDOW_NANOS = 1_500_000_000L
         val FILE_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }
