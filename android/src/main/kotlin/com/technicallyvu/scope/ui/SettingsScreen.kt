@@ -64,6 +64,10 @@ private const val WINDOW_STEP_MS = 100
 private const val STRENGTH_MIN = 0.2f
 private const val STRENGTH_MAX = 1.0f
 
+/** Ends of the sharpening strength slider (`Sharpener.MIN_STRENGTH`..`MAX_STRENGTH`). */
+private const val SHARPEN_MIN = 0.1f
+private const val SHARPEN_MAX = 1.0f
+
 /** Minimum touch target for a whole settings row. */
 private val RowHeight = 56.dp
 
@@ -125,6 +129,21 @@ fun SettingsScreen(
                 enabled = settings.denoise,
                 onCommit = { onChange(settings.copy(denoiseStrength = it)) },
             )
+            SwitchRow(
+                label = stringResource(R.string.settings_sharpen_label),
+                checked = settings.sharpen,
+                onCheckedChange = { onChange(settings.copy(sharpen = it)) },
+            )
+            SliderRow(
+                label = stringResource(R.string.settings_sharpen_strength_label),
+                value = settings.sharpenStrength,
+                valueLabel = { stringResource(R.string.settings_percent_format, (it * 100).roundToInt()) },
+                range = SHARPEN_MIN..SHARPEN_MAX,
+                steps = 0,
+                enabled = settings.sharpen,
+                onCommit = { onChange(settings.copy(sharpenStrength = it)) },
+            )
+            HelperText(stringResource(R.string.settings_sharpen_help))
 
             GroupHeader(R.string.settings_group_cable_button)
             SliderRow(

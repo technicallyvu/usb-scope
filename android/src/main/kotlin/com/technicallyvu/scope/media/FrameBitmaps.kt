@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import com.technicallyvu.scope.core.driver.FrameData
+import com.technicallyvu.scope.core.image.Sharpener
 import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.image.YuyvConverter
 
@@ -12,20 +13,30 @@ class FrameBitmaps {
     private var argb = IntArray(0)
     private var jpegPixels = IntArray(0)
 
-    fun toBitmap(data: FrameData, argbDenoiser: TemporalDenoiser? = null): Bitmap? = when (data) {
+    /**
+     * [argbDenoiser] and [argbSharpener] apply to decoded JPEG frames only, in that order (the same
+     * order `ScopeSession` uses for YUYV frames, which reach this class already filtered).
+     */
+    fun toBitmap(
+        data: FrameData,
+        argbDenoiser: TemporalDenoiser? = null,
+        argbSharpener: Sharpener? = null,
+    ): Bitmap? = when (data) {
         is FrameData.Jpeg -> {
-            // Mutable only when the denoiser needs to write pixels back into it; an immutable
-            // decode is cheaper and, for the no-denoise path, is what the rest of the app assumes.
+            // Mutable only when a filter needs to write pixels back into it; an immutable decode is
+            // cheaper and, for the unfiltered path, is what the rest of the app assumes.
+            val filtering = argbDenoiser != null || argbSharpener != null
             val opts = BitmapFactory.Options().apply {
-                inMutable = argbDenoiser != null
+                inMutable = filtering
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             val bmp = BitmapFactory.decodeByteArray(data.bytes, 0, data.bytes.size, opts)
-            if (bmp != null && argbDenoiser != null) {
+            if (bmp != null && filtering) {
                 val n = bmp.width * bmp.height
                 if (jpegPixels.size < n) jpegPixels = IntArray(n)
                 bmp.getPixels(jpegPixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                argbDenoiser.applyArgb(jpegPixels, bmp.width, bmp.height)
+                argbDenoiser?.applyArgb(jpegPixels, bmp.width, bmp.height)
+                argbSharpener?.applyArgb(jpegPixels, bmp.width, bmp.height)
                 bmp.setPixels(jpegPixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
             }
             bmp

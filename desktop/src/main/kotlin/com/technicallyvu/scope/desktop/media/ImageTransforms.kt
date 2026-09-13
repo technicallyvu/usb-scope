@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.desktop.media
 
 import com.technicallyvu.scope.core.driver.FrameData
+import com.technicallyvu.scope.core.image.Sharpener
 import com.technicallyvu.scope.core.image.TemporalDenoiser
 import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
@@ -12,20 +13,40 @@ object ImageTransforms {
     fun decodeJpeg(bytes: ByteArray): BufferedImage? =
         try { ImageIO.read(ByteArrayInputStream(bytes)) } catch (e: Exception) { null }
 
-    fun decode(data: FrameData): BufferedImage? = decode(data, null, null)
+    fun decode(data: FrameData): BufferedImage? = decode(data, null, null, null)
 
-    fun decode(data: FrameData, yuvDenoiser: TemporalDenoiser?, argbDenoiser: TemporalDenoiser?): BufferedImage? = when (data) {
+    fun decode(data: FrameData, yuvDenoiser: TemporalDenoiser?, argbDenoiser: TemporalDenoiser?): BufferedImage? =
+        decode(data, yuvDenoiser, argbDenoiser, null)
+
+    /** Denoise first, then sharpen — sharpening a noisy frame would amplify the grain. */
+    fun decode(
+        data: FrameData,
+        yuvDenoiser: TemporalDenoiser?,
+        argbDenoiser: TemporalDenoiser?,
+        sharpener: Sharpener?,
+    ): BufferedImage? = when (data) {
         is FrameData.Jpeg -> {
             val img = decodeJpeg(data.bytes)
-            if (img != null && argbDenoiser != null) {
+            if (img != null && (argbDenoiser != null || sharpener != null)) {
                 val w = img.width; val h = img.height
                 val pixels = img.getRGB(0, 0, w, h, null, 0, w)
-                argbDenoiser.applyArgb(pixels, w, h)
+                argbDenoiser?.applyArgb(pixels, w, h)
+                sharpener?.applyArgb(pixels, w, h)
                 img.setRGB(0, 0, w, h, pixels, 0, w)
             }
             img
         }
-        is FrameData.Yuyv422 -> yuyvToImage(yuvDenoiser?.apply(data) ?: data)
+        is FrameData.Yuyv422 -> {
+            val denoised = yuvDenoiser?.apply(data)
+            val filtered = when {
+                sharpener == null -> denoised ?: data
+                // Sharpener.apply writes in place: only ever on the denoiser's fresh output, or on
+                // a copy of our own — never on the driver's read buffer.
+                else -> (denoised ?: FrameData.Yuyv422(data.width, data.height, data.bytes.copyOf()))
+                    .also(sharpener::apply)
+            }
+            yuyvToImage(filtered)
+        }
     }
 
     /** Packed Y0 U Y1 V (BT.601 limited range) to TYPE_3BYTE_BGR. */

@@ -5,6 +5,7 @@ import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.Sharpener
 import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.session.DeviceCandidates
 import com.technicallyvu.scope.core.usb.DeviceRef
@@ -52,6 +53,8 @@ data class UiState(
     val showDebug: Boolean = false,
     val lastSaved: String? = null,
     val denoise: Boolean = true,
+    /** Cosmetic luma unsharp mask, applied after the denoiser. Off by default; it adds no detail. */
+    val sharpen: Boolean = false,
 )
 
 /**
@@ -90,6 +93,8 @@ class ScopeViewModel(
     private var lastPressNanos: Long? = null
     @Volatile private var yuvDenoiser: TemporalDenoiser? = null
     @Volatile private var argbDenoiser: TemporalDenoiser? = null
+    /** Stateless apart from a scratch buffer, so unlike the denoisers it survives across sessions. */
+    private val sharpener = Sharpener()
     /** The id of the driver that last successfully streamed; used to avoid resetting rotation on a same-device reconnect. */
     private var lastDriverId: String? = null
     /** Which attached device to try next: skips what can never open, rotates past what just failed. */
@@ -120,14 +125,14 @@ class ScopeViewModel(
     }
 
     /**
-     * Saves what the user sees. With denoise on that is the filtered picture, which only exists as
-     * decoded pixels, so the shown image is re-encoded (rotation/mirror already baked in); with
-     * denoise off a JPEG frame keeps its original bytes and an EXIF orientation tag.
+     * Saves what the user sees. With denoise or sharpen on that is the filtered picture, which only
+     * exists as decoded pixels, so the shown image is re-encoded (rotation/mirror already baked in);
+     * with both off a JPEG frame keeps its original bytes and an EXIF orientation tag.
      */
     fun snapshot() {
         val s = _state.value
         val path = try {
-            if (s.denoise) SnapshotWriter.write(lastImage ?: return, s.outputDir)
+            if (s.denoise || s.sharpen) SnapshotWriter.write(lastImage ?: return, s.outputDir)
             else SnapshotWriter.write(lastFrame ?: return, s.rotation, s.mirror, s.outputDir)
         } catch (e: Exception) {
             System.err.println("Snapshot failed: ${e.message}")
@@ -190,6 +195,9 @@ class ScopeViewModel(
         _state.update { it.copy(denoise = enabled) }
     }
 
+    /** Cosmetic sharpening on/off. Applied after the denoiser, never before; see `Sharpener`. */
+    fun setSharpen(enabled: Boolean) = _state.update { it.copy(sharpen = enabled) }
+
     fun setOutputDir(dir: Path) = _state.update { it.copy(outputDir = dir) }
 
     /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
@@ -248,7 +256,12 @@ class ScopeViewModel(
 
     private fun onFrame(frame: Frame, stats: StreamStats) {
         val s = _state.value
-        val decoded = ImageTransforms.decode(frame.data, if (s.denoise) yuvDenoiser else null, if (s.denoise) argbDenoiser else null) ?: return
+        val decoded = ImageTransforms.decode(
+            frame.data,
+            if (s.denoise) yuvDenoiser else null,
+            if (s.denoise) argbDenoiser else null,
+            if (s.sharpen) sharpener else null,
+        ) ?: return
         val shown = ImageTransforms.apply(decoded, s.rotation, s.mirror)
         lastFrame = frame.data
         lastImage = shown

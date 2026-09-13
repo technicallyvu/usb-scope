@@ -13,11 +13,13 @@ class SettingsWiringTest {
 
     private class FakeTarget : SettingsTarget {
         val denoise = mutableListOf<Pair<Boolean, Float>>()
+        val sharpen = mutableListOf<Pair<Boolean, Float>>()
         val windowNanos = mutableListOf<Long>()
         val overrides = mutableListOf<Triple<String, Int?, Boolean?>>()
         val cleared = mutableListOf<String>()
 
         override fun setDenoise(enabled: Boolean, strength: Float) { denoise += enabled to strength }
+        override fun setSharpen(enabled: Boolean, strength: Float) { sharpen += enabled to strength }
         override fun setDoublePressWindowNanos(nanos: Long) { windowNanos += nanos }
         override fun setDefaultOverride(driverId: String, rotation: Int?, mirror: Boolean?) {
             overrides += Triple(driverId, rotation, mirror)
@@ -37,17 +39,20 @@ class SettingsWiringTest {
     }
 
     @Test
-    fun `applying settings pushes denoise, the window and every remembered default`() {
+    fun `applying settings pushes denoise, sharpen, the window and every remembered default`() {
         val target = FakeTarget()
         SettingsApplier(target).apply(
             Settings(
                 denoise = true,
                 denoiseStrength = 0.8f,
+                sharpen = true,
+                sharpenStrength = 0.4f,
                 doublePressWindowMs = 2000,
                 defaults = mapOf("i4season-yuv" to DriverDefault(180, true), "uvc-bulk" to DriverDefault(0, false)),
             ),
         )
         assertEquals(listOf(true to 0.8f), target.denoise)
+        assertEquals(listOf(true to 0.4f), target.sharpen)
         assertEquals(listOf(2_000_000_000L), target.windowNanos)
         assertEquals(
             setOf(Triple("i4season-yuv", 180, true), Triple("uvc-bulk", 0, false)),
@@ -96,6 +101,7 @@ class SettingsWiringTest {
         val second = FakeTarget()
         SettingsApplier(second).apply(settings)
         assertEquals(listOf(false to 0.6f), second.denoise)
+        assertEquals(listOf(false to 0.5f), second.sharpen, "a fresh session has no sharpen state either")
         assertEquals(listOf(1_500_000_000L), second.windowNanos)
         assertEquals(listOf(Triple("a", 90, false)), second.overrides)
     }
@@ -104,12 +110,13 @@ class SettingsWiringTest {
     fun `the round trip through the store leaves the values the session gets unchanged`() {
         // Guards the seam between AppSettings clamping and what reaches the session: an
         // out-of-range strength or window is clamped by the store, so the applier never sees one.
-        val stored = Settings(denoiseStrength = 9f, doublePressWindowMs = 50_000)
+        val stored = Settings(denoiseStrength = 9f, sharpenStrength = 9f, doublePressWindowMs = 50_000)
         val store = AppSettings(FakePrefs())
         store.update { stored }
         val target = FakeTarget()
         SettingsApplier(target).apply(store.flow.value)
         assertEquals(listOf(true to 1.0f), target.denoise)
+        assertEquals(listOf(false to 1.0f), target.sharpen)
         assertEquals(listOf(5_000_000_000L), target.windowNanos)
     }
 }
