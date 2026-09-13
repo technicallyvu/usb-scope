@@ -449,6 +449,101 @@ class ScopeSessionTest {
         s.stop()
     }
 
+    @Test
+    fun `denoise strength changes the blend and clamps into state`(): Unit = runBlocking {
+        suspend fun lastByte(strength: Float): Byte {
+            val sink = CountingSink()
+            val devices = FakeDevices(listOf(ref)) {
+                stream(6, fill = { i -> if (i % 2 == 1) FILL_A else FILL_B })
+            }
+            val s = session(devices, sink)
+            s.setDenoise(true, strength)
+            s.start()
+            withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+            // The stream is not looped and has exactly 6 frames, so waiting for all 6 lands on the
+            // same input frame index in both runs regardless of scheduling jitter.
+            withTimeout(5_000) { while (sink.frames.get() < 6) kotlinx.coroutines.delay(10) }
+            val blended = (requireNotNull(sink.lastFrame).data as FrameData.Yuyv422).bytes
+            s.stop()
+            return blended[0]
+        }
+
+        val low = lastByte(0.2f)
+        val high = lastByte(0.9f)
+        assertTrue(low != high, "denoise strengths 0.2 and 0.9 should blend the same input differently, both gave $low")
+
+        val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink())
+        s.setDenoise(true, 5f)
+        assertEquals(1.0f, s.state.value.denoiseStrength, "strength must clamp to the 0.2..1.0 range")
+    }
+
+    @Test
+    fun `double-press window change alters button detection`(): Unit = runBlocking {
+        suspend fun snapshotsAndToggles(windowNanos: Long): Pair<Int, Int> {
+            val sink = CountingSink()
+            val counter = AtomicLong(0)
+            val stepNanos = 100_000_000L // 100 ms per frame
+            val clock = { counter.getAndAdd(stepNanos) }
+            // Presses at frame 1 and frame 21: exactly 20 * 100 ms = 2.0 s apart.
+            val devices = FakeDevices(listOf(ref)) { frameSizedStream(25, buttonOn = setOf(1, 21)) }
+            val s = sessionWithClock(devices, sink, clock)
+            s.doublePressWindowNanos = windowNanos
+            s.start()
+            withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+            withTimeout(5_000) { while (sink.frames.get() < 25) kotlinx.coroutines.delay(10) }
+            devices.refs = emptyList()
+            withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+            s.stop()
+            return sink.buttons.get() to sink.toggles.get()
+        }
+
+        val (snapshots15, toggles15) = snapshotsAndToggles(1_500_000_000L)
+        assertEquals(2, snapshots15, "presses 2.0s apart with a 1.5s window should snapshot twice")
+        assertEquals(0, toggles15, "presses 2.0s apart with a 1.5s window must never toggle")
+
+        val (snapshots25, toggles25) = snapshotsAndToggles(2_500_000_000L)
+        assertEquals(1, snapshots25, "presses 2.0s apart with a 2.5s window should snapshot once")
+        assertEquals(1, toggles25, "presses 2.0s apart with a 2.5s window should toggle once")
+    }
+
+    @Test
+    fun `default override sets rotation and mirror at session start and user changes survive reconnect`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val first = EndableTransport(stream(6, loop = true))
+        val devices = FakeDevices(listOf(ref)) { first }
+        val s = session(devices, sink)
+        s.setDefaultOverride("i4season-yuv", 90, true)
+        s.start()
+        val st = withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(90, st.rotation, "override rotation should apply at session start")
+        assertTrue(st.mirror, "override mirror should apply at session start")
+
+        s.rotate() // 90 -> 180, the user's own choice from here on
+        assertEquals(180, s.state.value.rotation)
+
+        devices.opener = { stream(6, loop = true) }
+        first.endNow = true
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(180, s.state.value.rotation, "reconnect of the same driver must keep the user's rotation, not reapply the override")
+        assertTrue(s.state.value.mirror)
+        s.stop()
+    }
+
+    @Test
+    fun `driverId is set while streaming and cleared after disconnect`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val devices = FakeDevices(listOf(ref)) { stream(6) }
+        val s = session(devices, sink)
+        s.start()
+        val st = withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals("i4season-yuv", st.driverId)
+        devices.refs = emptyList()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        assertEquals(null, s.state.value.driverId, "driverId must clear once the session leaves Streaming")
+        s.stop()
+    }
+
     private companion object {
         const val FILL_A: Byte = 100
         const val FILL_B: Byte = 103
