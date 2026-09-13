@@ -40,8 +40,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
@@ -118,16 +121,28 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         if (ui.hapticTick != entryHapticTick) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
+    // The first-launch tips: up until "Got it" (or a reset from Settings), never over a recording —
+    // the REC badge and the elapsed time matter more than advice by then.
+    val settings by vm.settings.collectAsState()
+    val showTips = !settings.tipsDismissed && !ui.session.recording
+    val onDismissTips = remember(vm) { vm::dismissTips }
+
     // Auto-hide. Every interaction bumps `interactions`, which restarts the effect below; the
     // controls are only ever hidden while a stream is actually running, so a user staring at
     // "No device" is never left with a bare black screen.
+    //
+    // An undismissed tips card also holds the chrome up. Android launches this app *on device
+    // attach*, so the one launch the card exists for can go NoDevice → Streaming in a couple of
+    // seconds, and a four-second window to read four lines and find "Got it" defeats the point.
+    // The card carries its own explicit dismissal, so it is allowed to own the timer until then;
+    // one tap on "Got it" restores normal auto-hide behaviour for good.
     val streaming = ui.session.connection is ConnectionState.Streaming
     var interactions by remember { mutableIntStateOf(0) }
     var chromeVisible by remember { mutableStateOf(true) }
     val onInteract: () -> Unit = remember { { interactions++ } }
-    LaunchedEffect(streaming, interactions) {
+    LaunchedEffect(streaming, interactions, showTips) {
         chromeVisible = true
-        if (!streaming) return@LaunchedEffect
+        if (!streaming || showTips) return@LaunchedEffect
         delay(AUTO_HIDE_MILLIS)
         chromeVisible = false
     }
@@ -142,13 +157,6 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         if (ui.flashTick != entryFlashTick) interactions++
     }
 
-    // The first-launch tips: up until "Got it" (or a reset from Settings), never over a recording —
-    // the REC badge and the elapsed time matter more than advice by then — and faded with the rest
-    // of the chrome by the auto-hide timer above.
-    val settings by vm.settings.collectAsState()
-    val showTips = !settings.tipsDismissed && !ui.session.recording
-    val onDismissTips = remember(vm) { vm::dismissTips }
-
     val snackbarHostState = remember { SnackbarHostState() }
     // Keyed on the tick, not the text: two identical messages in a row would otherwise leave the
     // key unchanged, so the second would never be shown (nor consumed).
@@ -160,6 +168,13 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         vm.clearMessage()
     }
 
+    // How much of the bottom of the screen the tips card, the toast and the sheet are using. The
+    // "Plug in your endoscope." prompt is centred in what is left rather than in the whole window:
+    // centred in the whole window, a 360 dp phone showing the four-line tips card drew the card
+    // straight over the prompt.
+    var bottomChromePx by remember { mutableIntStateOf(0) }
+    val bottomChrome = with(LocalDensity.current) { bottomChromePx.toDp() }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -168,9 +183,27 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
             // reach this detector; those restart the timer through onInteract instead.
             .pointerInput(Unit) { detectTapGestures { interactions++ } },
     ) {
-        LiveContent(ui)
+        // The picture is full-bleed: it is the whole point of the screen and the chrome floats over
+        // it. Only the no-picture prompt below has to keep out of the chrome's way.
+        ui.image?.let { img ->
+            Image(
+                bitmap = img.asImageBitmap(),
+                contentDescription = stringResource(R.string.cd_live_view),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
 
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            if (ui.image == null) {
+                // Inside the inset box and padded by the measured chrome height, so "centred" means
+                // centred in the space actually left over.
+                NoPictureMessage(
+                    ui,
+                    Modifier.fillMaxSize().padding(bottom = bottomChrome),
+                )
+            }
+
             AnimatedVisibility(
                 visible = chromeVisible,
                 enter = fadeIn(),
@@ -186,7 +219,10 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                         replaying = ui.replaying,
                         fps = if (streaming && ui.showStats) ui.session.stats.fps else null,
                     )
-                    if (ui.showStats) StatsOverlay(ui.session.stats)
+                    // Only when there is a stream to have statistics about: with no device the
+                    // overlay showed a permanent "0.0 fps  frames 0  partial 0  dropped 0  0.0 MB",
+                    // which looks like a stalled stream rather than an absent one.
+                    if (ui.showStats && (streaming || ui.replaying)) StatsOverlay(ui.session.stats)
                 }
             }
 
@@ -200,7 +236,11 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                 Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
-                    .padding(end = if (wide) 88.dp else 0.dp),
+                    .padding(end = if (wide) 88.dp else 0.dp)
+                    // Feeds the prompt's bottom padding above. Reported on every size change, so a
+                    // dismissed tips card or a hidden sheet immediately gives the prompt its space
+                    // back.
+                    .onSizeChanged { bottomChromePx = it.height },
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AnimatedVisibility(
@@ -305,29 +345,28 @@ private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: S
     )
 }
 
-/** The picture, or the one line that explains why there isn't one. */
+/**
+ * The one line that explains why there is no picture. The caller places it in the space the bottom
+ * chrome is not using, so it stays centred in what the user can actually see.
+ */
 @Composable
-private fun LiveContent(ui: UiState) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val img = ui.image
-        if (img != null) {
-            Image(
-                bitmap = img.asImageBitmap(),
-                contentDescription = stringResource(R.string.cd_live_view),
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
-        } else {
-            val text = when (val c = ui.session.connection) {
-                is ConnectionState.NoDevice -> stringResource(R.string.live_view_no_device)
-                is ConnectionState.Connecting -> stringResource(R.string.live_view_connecting)
-                is ConnectionState.Streaming -> stringResource(R.string.live_view_waiting_first_frame)
-                is ConnectionState.Failed ->
-                    if (ui.permissionDevice != null) stringResource(R.string.live_view_permission_needed)
-                    else stringResource(R.string.live_view_error_format, c.message)
-            }
-            Text(text, color = Color.White, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(24.dp))
+private fun NoPictureMessage(ui: UiState, modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        val text = when (val c = ui.session.connection) {
+            is ConnectionState.NoDevice -> stringResource(R.string.live_view_no_device)
+            is ConnectionState.Connecting -> stringResource(R.string.live_view_connecting)
+            is ConnectionState.Streaming -> stringResource(R.string.live_view_waiting_first_frame)
+            is ConnectionState.Failed ->
+                if (ui.permissionDevice != null) stringResource(R.string.live_view_permission_needed)
+                else stringResource(R.string.live_view_error_format, c.message)
         }
+        Text(
+            text,
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(24.dp),
+        )
     }
 }
 

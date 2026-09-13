@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -34,10 +36,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
@@ -63,14 +65,25 @@ import com.technicallyvu.scope.core.TrustInfo
 fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
     BackHandler(enabled = true, onBack = onBack)
     val context = LocalContext.current
-    val requestedPermissions = remember {
+    // The merged manifest asks for more than `src/main` declares: AndroidX injects
+    // "<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" so ContextCompat can keep an
+    // internal broadcast inside this process. Counting it made this screen say "Permissions
+    // requested: 1" for an app that asks the system for nothing at all. See countSystemPermissions.
+    val permissions = remember {
         runCatching {
-            context.packageManager
+            val requested = context.packageManager
                 .getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
                 .requestedPermissions
-                ?.size ?: 0
-        }.getOrDefault(0)
+            val counted = countSystemPermissions(context.packageName, requested)
+            counted to ((requested?.size ?: 0) - counted)
+        }.getOrDefault(0 to 0)
     }
+    val (requestedPermissions, appPrivatePermissions) = permissions
+    // Reflowed once: `TrustInfo` keeps the licence hard-wrapped at ~80 columns (that is how MIT is
+    // distributed), which on a phone wraps a second time and looks broken. See reflowParagraphs.
+    val noNetworkStatement = remember { reflowParagraphs(TrustInfo.noNetworkStatement) }
+    val protocolNote = remember { reflowParagraphs(TrustInfo.protocolNote) }
+    val licenseText = remember { reflowParagraphs(TrustInfo.licenseText) }
     var showDevSheet by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -105,12 +118,18 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                 // Nothing advertises it, and a release build attaches no gesture at all.
                 val versionModifier =
                     if (devControls != null && BuildConfig.DEBUG) {
-                        Modifier.combinedClickable(
-                            // A plain tap must keep doing nothing; only the long-press opens the sheet.
-                            onClick = {},
-                            onLongClick = { showDevSheet = true },
-                            onLongClickLabel = stringResource(R.string.cd_open_developer_options),
-                        )
+                        Modifier
+                            // A bodyMedium line box is ~20 dp; the global 48 dp minimum applies to
+                            // a hidden gesture too, and a small target makes the emulator's
+                            // `input swipe` verification flaky.
+                            .heightIn(min = 48.dp)
+                            .combinedClickable(
+                                // A plain tap must keep doing nothing; only the long-press opens the sheet.
+                                onClick = {},
+                                onLongClick = { showDevSheet = true },
+                                onLongClickLabel = stringResource(R.string.cd_open_developer_options),
+                            )
+                            .wrapContentHeight(Alignment.CenterVertically)
                     } else {
                         Modifier
                     }
@@ -126,9 +145,18 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                     stringResource(R.string.about_permissions_requested_format, requestedPermissions),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                // Only when something really was excluded, so the footnote is never an unexplained
+                // disclaimer about a thing that did not happen.
+                if (appPrivatePermissions > 0) {
+                    Text(
+                        stringResource(R.string.about_permissions_internal_footnote),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             item { HorizontalDivider() }
-            item { Text(TrustInfo.noNetworkStatement, style = MaterialTheme.typography.bodyMedium) }
+            item { Text(noNetworkStatement, style = MaterialTheme.typography.bodyMedium) }
             item {
                 Column {
                     Text(
@@ -155,7 +183,7 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                 )
             }
             item { HorizontalDivider() }
-            item { Text(TrustInfo.protocolNote, style = MaterialTheme.typography.bodyMedium) }
+            item { Text(protocolNote, style = MaterialTheme.typography.bodyMedium) }
             item { Text(stringResource(R.string.about_attributions_title), style = MaterialTheme.typography.titleSmall) }
             items(TrustInfo.attributions) { a ->
                 Column {
@@ -174,7 +202,10 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
             }
             item { HorizontalDivider() }
             item { Text(stringResource(R.string.about_license_title), style = MaterialTheme.typography.titleSmall) }
-            item { Text(TrustInfo.licenseText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+            // Body font, not monospace: this is prose, and a fixed-pitch column at ~80 characters
+            // is unreadable on a phone. Reflowed above so it wraps to the screen instead of to the
+            // source file's line endings.
+            item { Text(licenseText, style = MaterialTheme.typography.bodySmall) }
         }
     }
 

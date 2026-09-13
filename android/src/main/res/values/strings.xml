@@ -69,7 +69,8 @@
 
     <!-- ===== Tips card (first launch, no device connected yet) ===== -->
     <string name="tips_title">Quick tips</string>
-    <string name="tips_line_plug_in">Plug the scope into the USB-C port. The app opens automatically.</string>
+    <string name="tips_line_plug_in">Plug the scope into the USB-C port. The app opens itself — tap Allow when Android asks.</string>
+    <string name="tips_line_hold_button">Hold the cable button about half a second — quick taps are ignored.</string>
     <string name="tips_line_press_toggle">Press the cable button once for a snapshot, twice quickly to start or stop recording.</string>
     <!-- %1$s is media_folder_name, so the promise and the album can never drift apart. -->
     <string name="tips_line_gallery_location">Photos and clips land in your Gallery, in a folder called %1$s.</string>
@@ -125,6 +126,9 @@
     <string name="about_title">About &amp; privacy</string>
     <string name="about_version_format">Version %1$s (%2$s), build %3$s</string>
     <string name="about_permissions_requested_format">Permissions requested: %1$d</string>
+    <!-- Shown only when the merged manifest carried an app-private signature permission (AndroidX
+         injects one for its internal broadcast receiver) that the count above deliberately skips. -->
+    <string name="about_permissions_internal_footnote">App-internal signature permissions (not visible to other apps) are not counted.</string>
     <string name="about_permissions_not_requested_title">This app does not have:</string>
     <string name="about_bullet_format">• %1$s</string>
     <string name="about_attributions_title">Attributions</string>

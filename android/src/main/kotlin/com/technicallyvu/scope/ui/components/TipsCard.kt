@@ -18,9 +18,10 @@ import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.R
 
 /**
- * The three things a first-time user needs to know, shown over the live view until they tap
- * "Got it". The caller decides when it is up (until dismissed, never while recording) and fades it
- * with the rest of the chrome.
+ * The four things a first-time user needs to know (spec §14), shown over the live view until they
+ * tap "Got it". The caller decides when it is up (until dismissed, never while recording); while it
+ * is up it also holds off the chrome's auto-hide timer, so the card cannot fade out from under
+ * someone still reading it.
  *
  * @param onDismiss sets `tipsDismissed`; the settings screen can bring the card back.
  */
@@ -43,6 +44,9 @@ fun TipsCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
         ) {
             Text(stringResource(R.string.tips_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.tips_line_plug_in), style = MaterialTheme.typography.bodyMedium)
+            // Spec §14 requires this one: the driver debounces the cable button, so a quick tap
+            // does nothing at all and a first-time user has no way to discover why.
+            Text(stringResource(R.string.tips_line_hold_button), style = MaterialTheme.typography.bodyMedium)
             Text(stringResource(R.string.tips_line_press_toggle), style = MaterialTheme.typography.bodyMedium)
             // The album name is the one the saver actually uses, not a copy of it.
             Text(

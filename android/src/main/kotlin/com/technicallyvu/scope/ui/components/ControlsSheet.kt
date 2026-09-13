@@ -3,8 +3,7 @@ package com.technicallyvu.scope.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,9 +41,9 @@ import com.technicallyvu.scope.R
 private val ButtonSize = 56.dp
 
 /**
- * Every on-screen control, as a translucent sheet across the bottom (compact) or a vertical rail on
- * the end side (wide). The caller places and fades it; the sheet itself only decides which buttons
- * are live.
+ * Every on-screen control, as a translucent sheet across the bottom (compact, two fixed rows of
+ * four) or a scrolling vertical rail on the end side (wide). The caller places and fades it; the
+ * sheet itself only decides which buttons are live.
  *
  * Each control calls [onInteract] before its own action so using a control restarts the caller's
  * auto-hide timer instead of racing it.
@@ -57,7 +56,6 @@ private val ButtonSize = 56.dp
  * @param streaming a live stream *and* a live frame — after an unplug the last bitmap is dropped,
  * and a stale one must never leave Snapshot/Record enabled.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ControlsSheet(
     streaming: Boolean,
@@ -77,7 +75,8 @@ fun ControlsSheet(
     onAbout: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val buttons: @Composable () -> Unit = {
+    // Row 1: the things done to a picture. Row 2: the things done to the app.
+    val rowOne: @Composable () -> Unit = {
         GlyphButton(
             contentDescription = stringResource(R.string.cd_snapshot),
             enabled = streaming,
@@ -115,7 +114,9 @@ fun ControlsSheet(
             enabled = !recording,
             onClick = { onInteract(); onToggleMirror() },
         ) { tint -> mirrorGlyph(tint) }
+    }
 
+    val rowTwo: @Composable () -> Unit = {
         GlyphToggleButton(
             contentDescription = stringResource(R.string.cd_denoise),
             checked = denoise,
@@ -171,13 +172,29 @@ fun ControlsSheet(
                     .padding(horizontal = 4.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-            ) { buttons() }
+            ) { rowOne(); rowTwo() }
         } else {
-            FlowRow(
+            // Two fixed rows of four rather than a FlowRow. FlowRow wrapped on available width, so
+            // the same eight buttons broke 7 + 1 at 411 dp and 6 + 2 at 360 dp — a lone Settings or
+            // About stranded on a second line reads as a layout bug rather than a design. Four per
+            // row is 4 × 56 = 224 dp of buttons, which fits inside the 352 dp a 360 dp phone leaves
+            // after this padding (and inside 312 dp on a 320 dp device), so the split is the same
+            // everywhere and SpaceEvenly just widens the gaps on a bigger screen.
+            Column(
                 Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.Center,
                 verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) { buttons() }
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { rowOne() }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { rowTwo() }
+            }
         }
     }
 }
