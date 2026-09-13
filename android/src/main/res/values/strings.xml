@@ -85,6 +85,9 @@
     <string name="settings_group_about">About</string>
     <string name="settings_denoise_label">Reduce noise</string>
     <string name="settings_denoise_strength_label">Noise reduction strength</string>
+    <string name="settings_sharpen_label">Sharpen picture</string>
+    <string name="settings_sharpen_strength_label">Sharpening strength</string>
+    <string name="settings_sharpen_help">The camera sends 320×240. Sharpening makes edges crisper on screen and in saved files but adds no real detail.</string>
     <string name="settings_double_press_window_label">Double-press window</string>
     <string name="settings_double_press_window_help">Press the cable button once for a photo. Press it twice within this time to start or stop a clip.</string>
     <string name="settings_haptics_label">Vibrate on cable button</string>

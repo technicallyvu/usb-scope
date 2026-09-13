@@ -53,7 +53,7 @@ Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`,
   rotate, mirror, denoise, stats, settings, about. The sheet fades after four seconds without a touch while
   streaming and comes back on a tap; the REC badge never fades. On a Fold-open or tablet window the sheet becomes
   a rail down the side. A dismissable tips card explains the cable button and where files land on first launch.
-- **Settings** — denoise and its strength, the cable button's double-press window, haptics, keep screen on while
+- **Settings** — denoise and its strength, sharpening and its strength, the cable button's double-press window, haptics, keep screen on while
   streaming, the stats overlay, the devices whose rotation and mirror the app has remembered (with "Forget"), and
   "Show tips again". Everything persists across restarts.
 - **About & privacy** — the permission count, the source link, the MIT licence, attribution to the prior
@@ -62,6 +62,9 @@ Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`,
 ## Features (v0.3.1)
 - Temporal denoise (toggle in both apps): adaptive frame blending that removes sensor grain when the probe is
   still and passes moving detail through. Snapshots save what is on screen.
+- Optional sharpening (Settings on Android, a checkbox on desktop; off by default): a mild luma unsharp mask
+  applied after denoise. What the camera actually delivers, why files are native 320x240 and never upscaled,
+  and what sharpening does and does not do: `docs/image-quality.md`.
 - Cable button: one press takes a photo, two within the window (configurable, default 1.5 s) start or stop a clip.
 - Snapshot and recording feedback: shutter flash, a "Saved" toast with a thumbnail, a spinner while the encoder
   starts, a REC timer.

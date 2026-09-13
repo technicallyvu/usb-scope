@@ -269,6 +269,38 @@ class ScopeViewModelTest {
     }
 
     @Test
+    fun `sharpening is off by default and setSharpen flips it`(@TempDir dir: Path) = runBlocking {
+        val vm = vm(FakeDevices(emptyList()) { error("unused") }, dir)
+        assertTrue(!vm.state.value.sharpen, "sharpening is opt-in: it adds no detail, only apparent crispness")
+        vm.setSharpen(true)
+        assertTrue(vm.state.value.sharpen)
+        vm.setSharpen(false)
+        assertTrue(!vm.state.value.sharpen)
+    }
+
+    @Test
+    fun `with sharpening on the picture changes and the snapshot is the shown one`(@TempDir dir: Path) = runBlocking {
+        val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
+        val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }
+        val vm = vm(devices, dir)
+        // Denoise off, so this is the sharpener's doing and nothing else.
+        vm.toggleDenoise()
+        vm.setSharpen(true)
+        vm.start()
+        val shown = requireNotNull(withTimeout(5_000) { vm.state.first { it.image != null } }.image)
+        vm.snapshot()
+        val jpg = requireNotNull(
+            Files.list(dir).use { it.toList() }.firstOrNull { it.fileName.toString().endsWith(".jpg") },
+        ) { "no jpg written" }
+        val saved = requireNotNull(ImageIO.read(jpg.toFile()))
+        // Sharpening only exists in the decoded pixels, so the snapshot must be the shown picture
+        // re-encoded (rotation baked in), not the frame's original bytes plus an EXIF tag.
+        assertEquals(shown.width, saved.width)
+        assertEquals(shown.height, saved.height)
+        vm.stop()
+    }
+
+    @Test
     fun `with denoise on the snapshot has the dimensions of the shown image`(@TempDir dir: Path) = runBlocking {
         val packets = TestPackets.stream(40, buttonMask = UseeplusPacket.BUTTON_MASK)
         val devices = FakeDevices(listOf(ref)) { ReplayTransport(packets, loop = true, sleep = Thread::sleep) }

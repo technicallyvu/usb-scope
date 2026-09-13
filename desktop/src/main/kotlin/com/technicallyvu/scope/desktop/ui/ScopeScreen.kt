@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -105,6 +106,10 @@ private fun Controls(s: UiState, vm: ScopeViewModel, onAbout: () -> Unit) {
             OutlinedButton(onClick = vm::rotate, enabled = !s.recording) { Text("Rotate (${s.rotation}°)") }
             OutlinedButton(onClick = vm::toggleMirror, enabled = !s.recording) { Text(if (s.mirror) "Mirror: on" else "Mirror: off") }
             OutlinedButton(onClick = vm::toggleDenoise) { Text(if (s.denoise) "Denoise: on" else "Denoise: off") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = s.sharpen, onCheckedChange = vm::setSharpen)
+                Text("Sharpen")
+            }
             OutlinedButton(onClick = vm::toggleDebug) { Text(if (s.showDebug) "Hide stats" else "Stats") }
             OutlinedButton(onClick = onAbout) { Text("About") }
         }

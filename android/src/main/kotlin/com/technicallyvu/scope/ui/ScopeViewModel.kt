@@ -18,6 +18,7 @@ import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.fixture.ReplayDeviceSource
 import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
 import com.technicallyvu.scope.core.image.ExifOrientation
+import com.technicallyvu.scope.core.image.Sharpener
 import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.session.ConnectionState
 import com.technicallyvu.scope.core.session.FrameSink
@@ -236,13 +237,21 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         private var windowMaxGapMs = 0L
         private var windowProcessNanos = 0L
         private val argbDenoiser = TemporalDenoiser()
+        /**
+         * The sharpener for decoded JPEG frames. Its strength follows the session's, which the
+         * settings collector keeps up to date. YUYV frames arrive already sharpened by
+         * [ScopeSession], so they must not be run through this one as well.
+         */
+        private val argbSharpener = Sharpener()
 
         override fun onFrame(frame: Frame, state: SessionState) {
             if (token != currentSessionToken) return
             val t0 = System.nanoTime()
             lastFrame = frame.data
-            val denoiser = if (state.denoise && frame.data is FrameData.Jpeg) argbDenoiser else null
-            val bmp = bitmaps.toBitmap(frame.data, denoiser) ?: return
+            val jpeg = frame.data is FrameData.Jpeg
+            val denoiser = if (state.denoise && jpeg) argbDenoiser else null
+            val sharpener = if (state.sharpen && jpeg) argbSharpener.also { it.strength = state.sharpenStrength } else null
+            val bmp = bitmaps.toBitmap(frame.data, denoiser, sharpener) ?: return
             val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
             lastImage = shown
             synchronized(recorderLock) {
@@ -422,10 +431,10 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 when {
-                    // A snapshot saves what the user sees. With denoise on that is the filtered
-                    // picture, which only exists as pixels, so both frame kinds go through the
-                    // bitmap (re-encoded JPEG at quality 92, rotation/mirror already baked in).
-                    s.denoise -> saver.saveBitmapJpeg(shown, name)
+                    // A snapshot saves what the user sees. With denoise or sharpen on that is the
+                    // filtered picture, which only exists as pixels, so both frame kinds go through
+                    // the bitmap (re-encoded JPEG at quality 92, rotation/mirror already baked in).
+                    s.denoise || s.sharpen -> saver.saveBitmapJpeg(shown, name)
                     // Original bytes plus an EXIF orientation tag: no re-encode, no quality loss.
                     data is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
                     // Compress the bitmap the user is looking at. Never re-convert: FrameBitmaps

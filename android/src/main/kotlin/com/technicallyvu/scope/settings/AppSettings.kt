@@ -20,6 +20,9 @@ data class DriverDefault(val rotation: Int, val mirror: Boolean)
 data class Settings(
     val denoise: Boolean = true,
     val denoiseStrength: Float = 0.6f,
+    /** Cosmetic luma unsharp mask, applied after the denoiser. Off by default; it adds no detail. */
+    val sharpen: Boolean = false,
+    val sharpenStrength: Float = 0.5f,
     val doublePressWindowMs: Int = 1500,
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = true,
@@ -59,6 +62,8 @@ class AppSettings(private val prefs: SharedPreferences) {
         Settings(
             denoise = prefs.getBoolean(KEY_DENOISE, true),
             denoiseStrength = prefs.getFloat(KEY_DENOISE_STRENGTH, 0.6f),
+            sharpen = prefs.getBoolean(KEY_SHARPEN, false),
+            sharpenStrength = prefs.getFloat(KEY_SHARPEN_STRENGTH, 0.5f),
             doublePressWindowMs = prefs.getInt(KEY_DOUBLE_PRESS_WINDOW_MS, 1500),
             haptics = prefs.getBoolean(KEY_HAPTICS, true),
             keepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, true),
@@ -72,6 +77,8 @@ class AppSettings(private val prefs: SharedPreferences) {
         prefs.edit()
             .putBoolean(KEY_DENOISE, s.denoise)
             .putFloat(KEY_DENOISE_STRENGTH, s.denoiseStrength)
+            .putBoolean(KEY_SHARPEN, s.sharpen)
+            .putFloat(KEY_SHARPEN_STRENGTH, s.sharpenStrength)
             .putInt(KEY_DOUBLE_PRESS_WINDOW_MS, s.doublePressWindowMs)
             .putBoolean(KEY_HAPTICS, s.haptics)
             .putBoolean(KEY_KEEP_SCREEN_ON, s.keepScreenOn)
@@ -84,6 +91,8 @@ class AppSettings(private val prefs: SharedPreferences) {
     companion object {
         const val KEY_DENOISE = "denoise"
         const val KEY_DENOISE_STRENGTH = "denoise_strength"
+        const val KEY_SHARPEN = "sharpen"
+        const val KEY_SHARPEN_STRENGTH = "sharpen_strength"
         const val KEY_DOUBLE_PRESS_WINDOW_MS = "double_press_window_ms"
         const val KEY_HAPTICS = "haptics"
         const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
@@ -97,6 +106,8 @@ class AppSettings(private val prefs: SharedPreferences) {
         private val VALID_ROTATIONS = setOf(0, 90, 180, 270)
 
         private fun clampStrength(v: Float): Float = v.coerceIn(0.2f, 1.0f)
+        /** The sharpener accepts a gentler floor than the denoiser: `Sharpener.MIN_STRENGTH`. */
+        private fun clampSharpenStrength(v: Float): Float = v.coerceIn(0.1f, 1.0f)
         private fun clampWindow(v: Int): Int = v.coerceIn(500, 5000)
 
         /** Snaps any int to the nearest member of [VALID_ROTATIONS], wrapping modulo 360. */
@@ -107,6 +118,7 @@ class AppSettings(private val prefs: SharedPreferences) {
 
         private fun clamp(s: Settings): Settings = s.copy(
             denoiseStrength = clampStrength(s.denoiseStrength),
+            sharpenStrength = clampSharpenStrength(s.sharpenStrength),
             doublePressWindowMs = clampWindow(s.doublePressWindowMs),
             defaults = s.defaults.mapValues { (_, d) -> DriverDefault(clampRotation(d.rotation), d.mirror) },
         )

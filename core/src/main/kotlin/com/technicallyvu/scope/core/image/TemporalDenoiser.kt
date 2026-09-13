@@ -66,7 +66,17 @@ class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, va
         const val MIN_STRONG_DIFFS = 2
     }
 
-    /** Returns a new, denoised frame. The input is never modified. */
+    /**
+     * Returns a new, denoised frame. The input is never modified.
+     *
+     * **The returned array is retained as this filter's previous-frame state — the caller must not
+     * write to it.** Every later frame is blended toward it, so a caller that edits those bytes in
+     * place (sharpening them, say) feeds its own output back into the filter: on a static edge the
+     * blend starts from an already-processed picture and the effect compounds frame after frame. It
+     * also poisons the motion metric, which would then compare a raw current frame against an
+     * edited previous one. Copy the bytes first, or use a filter that writes elsewhere
+     * ([Sharpener.sharpened]).
+     */
     fun apply(frame: FrameData.Yuyv422): FrameData.Yuyv422 {
         val w = frame.width; val h = frame.height; val src = frame.bytes
         val prev = prevYuyv

@@ -9,6 +9,7 @@ import com.technicallyvu.scope.core.session.ScopeSession
  */
 interface SettingsTarget {
     fun setDenoise(enabled: Boolean, strength: Float)
+    fun setSharpen(enabled: Boolean, strength: Float)
     fun setDoublePressWindowNanos(nanos: Long)
     fun setDefaultOverride(driverId: String, rotation: Int?, mirror: Boolean?)
     fun clearDefaultOverride(driverId: String)
@@ -17,6 +18,7 @@ interface SettingsTarget {
 /** [SettingsTarget] over a real session. */
 class SessionSettingsTarget(private val session: ScopeSession) : SettingsTarget {
     override fun setDenoise(enabled: Boolean, strength: Float) = session.setDenoise(enabled, strength)
+    override fun setSharpen(enabled: Boolean, strength: Float) = session.setSharpen(enabled, strength)
     override fun setDoublePressWindowNanos(nanos: Long) { session.doublePressWindowNanos = nanos }
     override fun setDefaultOverride(driverId: String, rotation: Int?, mirror: Boolean?) =
         session.setDefaultOverride(driverId, rotation, mirror)
@@ -37,14 +39,15 @@ const val MAX_DOUBLE_PRESS_WINDOW_MS = 5_000L
  * session rather than left behind. A new session gets a new applier, which therefore installs
  * everything from scratch (a fresh [ScopeSession] starts with no overrides at all).
  *
- * Denoise and the double-press window are cheap idempotent setters, so they are written on every
- * apply rather than diffed.
+ * Denoise, sharpen and the double-press window are cheap idempotent setters, so they are written on
+ * every apply rather than diffed.
  */
 class SettingsApplier(private val target: SettingsTarget) {
     private var appliedDefaults: Map<String, DriverDefault> = emptyMap()
 
     fun apply(settings: Settings) {
         target.setDenoise(settings.denoise, settings.denoiseStrength)
+        target.setSharpen(settings.sharpen, settings.sharpenStrength)
         target.setDoublePressWindowNanos(doublePressWindowNanos(settings.doublePressWindowMs))
         for ((driverId, default) in settings.defaults) {
             if (appliedDefaults[driverId] != default) {

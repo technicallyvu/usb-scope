@@ -22,6 +22,8 @@ class AppSettingsTest {
             it.copy(
                 denoise = false,
                 denoiseStrength = 0.8f,
+                sharpen = true,
+                sharpenStrength = 0.3f,
                 doublePressWindowMs = 2000,
                 haptics = false,
                 keepScreenOn = false,
@@ -34,6 +36,8 @@ class AppSettingsTest {
         val reloaded = AppSettings(prefs).flow.value
         assertEquals(false, reloaded.denoise)
         assertEquals(0.8f, reloaded.denoiseStrength)
+        assertEquals(true, reloaded.sharpen)
+        assertEquals(0.3f, reloaded.sharpenStrength)
         assertEquals(2000, reloaded.doublePressWindowMs)
         assertEquals(false, reloaded.haptics)
         assertEquals(false, reloaded.keepScreenOn)
@@ -49,26 +53,31 @@ class AppSettingsTest {
         settings.update {
             it.copy(
                 denoiseStrength = 5.0f,
+                sharpenStrength = 5.0f,
                 doublePressWindowMs = 100,
                 defaults = mapOf("cam" to DriverDefault(100, false)),
             )
         }
         assertEquals(1.0f, settings.flow.value.denoiseStrength)
+        assertEquals(1.0f, settings.flow.value.sharpenStrength)
         assertEquals(500, settings.flow.value.doublePressWindowMs)
         assertTrue(settings.flow.value.defaults.getValue("cam").rotation in setOf(0, 90, 180, 270))
 
-        settings.update { it.copy(denoiseStrength = -3.0f, doublePressWindowMs = 50_000) }
+        settings.update { it.copy(denoiseStrength = -3.0f, sharpenStrength = -3.0f, doublePressWindowMs = 50_000) }
         assertEquals(0.2f, settings.flow.value.denoiseStrength)
+        assertEquals(0.1f, settings.flow.value.sharpenStrength, "sharpening clamps to 0.1..1.0, not the denoiser's 0.2..1.0")
         assertEquals(5000, settings.flow.value.doublePressWindowMs)
 
         // Values written directly to the backing store (as if by an older/buggy build) are
         // clamped again on load, not just on write.
         val prefs2 = FakePrefs().apply {
             store["denoise_strength"] = 9.0f
+            store["sharpen_strength"] = 9.0f
             store["double_press_window_ms"] = 1
         }
         val reloaded = AppSettings(prefs2).flow.value
         assertEquals(1.0f, reloaded.denoiseStrength)
+        assertEquals(1.0f, reloaded.sharpenStrength)
         assertEquals(500, reloaded.doublePressWindowMs)
     }
 

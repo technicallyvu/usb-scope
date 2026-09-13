@@ -6,6 +6,8 @@ import com.technicallyvu.scope.core.fixture.LoggedPacket
 import com.technicallyvu.scope.core.fixture.ReplayTransport
 import com.technicallyvu.scope.core.i4season.I4seasonTestFrames
 import com.technicallyvu.scope.core.i4season.I4seasonYuvDriver
+import com.technicallyvu.scope.core.image.Sharpener
+import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
 import com.technicallyvu.scope.core.usb.UsbDeviceInfo
@@ -26,6 +28,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -134,6 +137,23 @@ class ScopeSessionTest {
         return ReplayTransport(I4seasonTestFrames.chunked(bytes, FRAME_BYTES), sleep = Thread::sleep, videoEndpoint = I4seasonYuvDriver.EP_IN).apply {
             controlResponses[0xA0 to 0x00] = I4seasonTestFrames.info(4, 2)
         }
+    }
+
+    /**
+     * A stream of [frames] frames whose YUYV payload is built per frame index by [payload], for the
+     * image-filter tests: a filter needs real structure in the picture, which [stream]'s uniform
+     * fill cannot give it.
+     */
+    private fun payloadStream(frames: Int, loop: Boolean = false, payload: (Int) -> ByteArray): ReplayTransport {
+        val bytes = (1..frames).fold(ByteArray(0)) { acc, i -> acc + I4seasonTestFrames.shortFrame(4, 2, payload(i)) }
+        return ReplayTransport(I4seasonTestFrames.chunked(bytes, 100), loop = loop, sleep = Thread::sleep, videoEndpoint = I4seasonYuvDriver.EP_IN).apply {
+            controlResponses[0xA0 to 0x00] = I4seasonTestFrames.info(4, 2)
+        }
+    }
+
+    /** A 4x2 YUYV payload with a vertical step edge: [dark] on the left two columns, [bright] on the right two. */
+    private fun edgePayload(dark: Int, bright: Int): ByteArray = ByteArray(4 * 2 * 2) { i ->
+        if (i % 2 == 1) 128.toByte() else (if ((i / 2) % 4 < 2) dark else bright).toByte()
     }
 
     private fun sessionWithClock(devices: DeviceSource, sink: FrameSink, clock: () -> Long) =
@@ -478,6 +498,127 @@ class ScopeSessionTest {
     }
 
     @Test
+    fun `sharpen is off by default and, when on, sharpens the delivered YUV frame`(): Unit = runBlocking {
+        suspend fun deliver(sharpen: Boolean): ByteArray {
+            val sink = CountingSink()
+            val devices = FakeDevices(listOf(ref)) { payloadStream(6) { edgePayload(EDGE_DARK, EDGE_BRIGHT) } }
+            val s = session(devices, sink)
+            // Denoise off, so this test sees the sharpener and nothing else.
+            s.setDenoise(false)
+            if (sharpen) s.setSharpen(true, 1.0f)
+            s.start()
+            withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+            withTimeout(5_000) { while (sink.frames.get() < 6) kotlinx.coroutines.delay(10) }
+            val bytes = (requireNotNull(sink.lastFrame).data as FrameData.Yuyv422).bytes
+            s.stop()
+            return bytes
+        }
+
+        val raw = deliver(sharpen = false)
+        assertTrue(raw.contentEquals(edgePayload(EDGE_DARK, EDGE_BRIGHT)), "sharpen defaults off: the frame passes through")
+
+        val sharpened = deliver(sharpen = true)
+        val expected = edgePayload(EDGE_DARK, EDGE_BRIGHT).let { b ->
+            FrameData.Yuyv422(4, 2, b).also { Sharpener(1.0f).apply(it) }.bytes
+        }
+        assertTrue(sharpened.contentEquals(expected), "sharpen on should deliver Sharpener's output, got ${sharpened.joinToString()}")
+        assertTrue(!sharpened.contentEquals(raw), "an edge frame must come out different once sharpened")
+        // Luma only: every odd byte is chroma and must be exactly what the driver produced.
+        assertTrue((1 until raw.size step 2).all { sharpened[it] == raw[it] }, "sharpening must not touch U/V")
+    }
+
+    @Test
+    fun `the frame path denoises first, then sharpens`(): Unit = runBlocking {
+        // Sharpening amplifies exactly the high frequencies noise lives in, so it has to run on the
+        // already-denoised picture. The order is pinned by reproducing it here with the two filters
+        // driven by hand over the very same input frames.
+        val sink = CountingSink()
+        val payload = { i: Int -> edgePayload(if (i % 2 == 1) EDGE_DARK else EDGE_DARK + 3, if (i % 2 == 1) EDGE_BRIGHT else EDGE_BRIGHT + 3) }
+        val devices = FakeDevices(listOf(ref)) { payloadStream(6, payload = payload) }
+        val s = session(devices, sink)
+        s.setSharpen(true, 1.0f)
+        assertTrue(s.state.value.denoise, "denoise is on by default; this test is about both filters together")
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        withTimeout(5_000) { while (sink.frames.get() < 6) kotlinx.coroutines.delay(10) }
+        val delivered = (requireNotNull(sink.lastFrame).data as FrameData.Yuyv422).bytes
+        s.stop()
+
+        val denoiser = TemporalDenoiser()
+        val sharpener = Sharpener(1.0f)
+        var expected = ByteArray(0)
+        for (i in 1..6) {
+            val out = denoiser.apply(FrameData.Yuyv422(4, 2, payload(i)))
+            // Sharpen *a new frame*, exactly as the session does. Sharpening `out` in place would
+            // repeat the implementation's old bug -- `out` is the denoiser's own history -- and the
+            // expectation would then match buggy and correct code alike.
+            expected = sharpener.sharpened(out).bytes
+        }
+        assertTrue(
+            delivered.contentEquals(expected),
+            "expected Sharpener(TemporalDenoiser(frame)); got ${delivered.joinToString()} vs ${expected.joinToString()}",
+        )
+    }
+
+    @Test
+    fun `a static scene converges because sharpening never writes into the denoiser's history`(): Unit = runBlocking {
+        // Every frame is byte-identical, so with the denoiser's history intact the pipeline settles
+        // immediately: blending a frame against an identical previous frame gives that frame back,
+        // and the sharpener then does the same thing to it every time. If the sharpener wrote in
+        // place on the array TemporalDenoiser.apply returns -- which is the very array it keeps as
+        // its previous frame -- each blend from frame 3 on would start from an already-sharpened
+        // picture and the overshoot would compound instead of settling.
+        val delivered = CopyOnWriteArrayList<ByteArray>()
+        val sink = object : FrameSink {
+            override fun onFrame(frame: Frame, state: SessionState) {
+                delivered += (frame.data as FrameData.Yuyv422).bytes.copyOf()
+            }
+            override fun onButtonSnapshot() {}
+        }
+        val devices = FakeDevices(listOf(ref)) { payloadStream(8) { edgePayload(EDGE_DARK, EDGE_BRIGHT) } }
+        val s = session(devices, sink)
+        s.setDenoise(true, 1.0f)
+        s.setSharpen(true, 1.0f)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        withTimeout(5_000) { while (delivered.size < 8) kotlinx.coroutines.delay(10) }
+        s.stop()
+
+        val first = delivered[0]
+        // Not a comparison of pass-throughs: the edge really is sharpened on the way out.
+        assertTrue(
+            !first.contentEquals(edgePayload(EDGE_DARK, EDGE_BRIGHT)),
+            "denoise + sharpen on a step edge must change the picture, got ${first.joinToString()}",
+        )
+        delivered.forEachIndexed { i, bytes ->
+            assertTrue(
+                bytes.contentEquals(first),
+                "frame ${i + 1} drifted from frame 1 on a static scene: ${bytes.joinToString()} vs ${first.joinToString()}",
+            )
+        }
+    }
+
+    @Test
+    fun `sharpen strength clamps and is remembered while sharpen is off`() {
+        val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink())
+        assertFalse(s.state.value.sharpen, "sharpening is opt-in")
+        assertEquals(0.5f, s.state.value.sharpenStrength)
+
+        s.setSharpen(true, 9f)
+        assertEquals(1.0f, s.state.value.sharpenStrength, "strength must clamp to the 0.1..1.0 range")
+        s.setSharpen(true, 0f)
+        assertEquals(0.1f, s.state.value.sharpenStrength)
+
+        // Off still records the strength, so turning it back on picks the same value up again.
+        s.setSharpen(false, 0.8f)
+        assertFalse(s.state.value.sharpen)
+        assertEquals(0.8f, s.state.value.sharpenStrength)
+        s.setSharpen(true)
+        assertTrue(s.state.value.sharpen)
+        assertEquals(0.8f, s.state.value.sharpenStrength)
+    }
+
+    @Test
     fun `double-press window change alters button detection`(): Unit = runBlocking {
         suspend fun snapshotsAndToggles(windowNanos: Long): Pair<Int, Int> {
             val sink = CountingSink()
@@ -659,6 +800,9 @@ class ScopeSessionTest {
     private companion object {
         const val FILL_A: Byte = 100
         const val FILL_B: Byte = 103
+        /** The two sides of the synthetic step edge the sharpen tests use. */
+        const val EDGE_DARK = 60
+        const val EDGE_BRIGHT = 200
         /** Header (511) + a 4x2 YUYV payload (16): exactly one [I4seasonTestFrames.frame]'s size. */
         const val FRAME_BYTES = 511 + 4 * 2 * 2
         /** ~15 fps, matching the real driver's typical frame spacing. */
