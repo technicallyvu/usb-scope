@@ -38,7 +38,7 @@ still passes on debug and release.
 - **Material 3 theme.** Dynamic colour on API 31+, a teal-seeded static scheme below it, light and
   dark, edge-to-edge with a black live-view surface.
 - **Placeholder launcher icon.** An adaptive icon: a lens ring, a highlight and a probe line on dark
-  teal. Marked a placeholder in the source; it is not the shipping icon.
+  teal. Superseded after 3b by the real all-vector icon; see `.superpowers/sdd/icon-report.md`.
 
 ## Decisions
 
@@ -216,10 +216,12 @@ Tests: 44 Android unit tests green (`AppSettingsTest` 5, `SettingsWiringTest` 6,
   (`translatable="false"`, because a translated album name would orphan everything already saved),
   the tips card and the README all use it. Changing it after release orphans saved media, so it is
   worth settling before the Play listing.
-- **The launcher icon.** The adaptive icon that ships is explicitly a placeholder.
+- ~~**The launcher icon.**~~ Settled after 3b: an all-vector adaptive icon with a monochrome layer.
 - **Where the stats toggle belongs.** It is currently both a button in the controls sheet and a
   switch in Settings, backed by the same preference. That is one of eight sheet buttons spent on a
   debug-flavoured overlay; if it moves to Settings only, the sheet drops to seven and the two-row
   layout wants a rethink.
 </content>
 </invoke>
+
+- **The icon — decided 2026-09-13.** See `art/tools/make_icon.py`; source `art/icon-source.png`.

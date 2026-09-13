@@ -3,9 +3,9 @@
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
     <string name="source_url">https://technicallyvu.com/usb-scope</string>
 
-    <!-- Placeholder launcher icon (see res/drawable/ic_launcher_foreground.xml and
-         res/values/ic_launcher_background.xml): a lens ring + probe line, dark teal background.
-         Replace with real artwork before a public release; tracked in docs/phase3b-notes.md. -->
+    <!-- Launcher icon: an all-vector adaptive icon (res/drawable/ic_launcher_background.xml,
+         ic_launcher_foreground.xml and ic_launcher_monochrome.xml) - a phone with a USB-C plug and
+         a cable running to a lit probe, on a mint-to-sky-blue diagonal gradient. -->
 
     <!-- ===== Status texts (StatusChip / status bar) ===== -->
     <string name="status_no_device">No device</string>
