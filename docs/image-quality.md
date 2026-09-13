@@ -12,10 +12,11 @@ about 11 frames a second**, and nothing else. Three separate pieces of evidence 
    describe itself; the 480-byte reply carries exactly one width and one height (320 and 240 on this unit,
    at offsets 46 and 48 — see `I4seasonInfoBlock`). There is no list of supported modes, because there is
    no choice to make.
-2. **There is no command to ask for a different size.** The vendor's own library exposes a set-resolution
-   call only for its *UVC-style* camera type. For the camera type this probe reports itself as, no such
-   command exists — nothing in the protocol can request 640x480 or anything else, so nothing in our driver
-   pretends to.
+2. **There is no command to ask for a different size.** The vendor library exposes a set-preview-size path
+   only for its libuvc-backed camera type (`ctype == 2`): `SetPreviewSize` returns `-1` without sending
+   anything for every other type, and its MFi camera class stubs `resolutionSet` empty. For the YUV type
+   (`ctype == 1`) — which is what this probe is classified as — the size is read from the device and never
+   set. Nothing in the protocol can request 640x480 or anything else, so nothing in our driver pretends to.
 3. **The vendor app upscales on save.** Its photos come out at 1920x1440 for a 4:3 picture and 1920x1080
    for a 16:9 one — the same two numbers whatever the scene, which is the signature of a fixed resize, not
    of a sensor. The "1920x1080" in the printed manual is the product family's marketing figure, not a

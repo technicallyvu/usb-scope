@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -548,13 +549,53 @@ class ScopeSessionTest {
         var expected = ByteArray(0)
         for (i in 1..6) {
             val out = denoiser.apply(FrameData.Yuyv422(4, 2, payload(i)))
-            sharpener.apply(out)
-            expected = out.bytes
+            // Sharpen *a new frame*, exactly as the session does. Sharpening `out` in place would
+            // repeat the implementation's old bug -- `out` is the denoiser's own history -- and the
+            // expectation would then match buggy and correct code alike.
+            expected = sharpener.sharpened(out).bytes
         }
         assertTrue(
             delivered.contentEquals(expected),
             "expected Sharpener(TemporalDenoiser(frame)); got ${delivered.joinToString()} vs ${expected.joinToString()}",
         )
+    }
+
+    @Test
+    fun `a static scene converges because sharpening never writes into the denoiser's history`(): Unit = runBlocking {
+        // Every frame is byte-identical, so with the denoiser's history intact the pipeline settles
+        // immediately: blending a frame against an identical previous frame gives that frame back,
+        // and the sharpener then does the same thing to it every time. If the sharpener wrote in
+        // place on the array TemporalDenoiser.apply returns -- which is the very array it keeps as
+        // its previous frame -- each blend from frame 3 on would start from an already-sharpened
+        // picture and the overshoot would compound instead of settling.
+        val delivered = CopyOnWriteArrayList<ByteArray>()
+        val sink = object : FrameSink {
+            override fun onFrame(frame: Frame, state: SessionState) {
+                delivered += (frame.data as FrameData.Yuyv422).bytes.copyOf()
+            }
+            override fun onButtonSnapshot() {}
+        }
+        val devices = FakeDevices(listOf(ref)) { payloadStream(8) { edgePayload(EDGE_DARK, EDGE_BRIGHT) } }
+        val s = session(devices, sink)
+        s.setDenoise(true, 1.0f)
+        s.setSharpen(true, 1.0f)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        withTimeout(5_000) { while (delivered.size < 8) kotlinx.coroutines.delay(10) }
+        s.stop()
+
+        val first = delivered[0]
+        // Not a comparison of pass-throughs: the edge really is sharpened on the way out.
+        assertTrue(
+            !first.contentEquals(edgePayload(EDGE_DARK, EDGE_BRIGHT)),
+            "denoise + sharpen on a step edge must change the picture, got ${first.joinToString()}",
+        )
+        delivered.forEachIndexed { i, bytes ->
+            assertTrue(
+                bytes.contentEquals(first),
+                "frame ${i + 1} drifted from frame 1 on a static scene: ${bytes.joinToString()} vs ${first.joinToString()}",
+            )
+        }
     }
 
     @Test

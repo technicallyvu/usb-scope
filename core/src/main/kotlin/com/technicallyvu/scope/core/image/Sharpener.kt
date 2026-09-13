@@ -35,16 +35,41 @@ class Sharpener(strength: Float = DEFAULT_STRENGTH) {
     private fun amount256(): Int = (strength * AMOUNT_PER_STRENGTH * 256f).toInt()
 
     /**
-     * Sharpens the Y samples of [frame] **in place**; U/V are left alone. The caller owns the
-     * buffer: pass a frame whose bytes may be written (the denoiser's output is a fresh array, a
-     * driver's own read buffer is not).
+     * Sharpens the Y samples of [frame] **in place**; U/V are left alone. Only for a buffer the
+     * caller owns outright. Two arrays are *not* the caller's to write and must go through
+     * [sharpened] or [applyTo] instead: a driver's own read buffer, and the array
+     * [TemporalDenoiser.apply] returned — that one is the denoiser's retained previous-frame state.
      */
-    fun apply(frame: FrameData.Yuyv422) {
+    fun apply(frame: FrameData.Yuyv422) = applyTo(frame, frame.bytes)
+
+    /**
+     * Sharpens [frame] into a **new** frame and leaves [frame] itself untouched. This is what the
+     * frame path uses: the picture it is handed always belongs to someone else (the driver, or the
+     * denoiser, which keeps its output as history), and the result is passed on to a sink that may
+     * outlive the next frame, so it gets an array of its own rather than a shared scratch buffer.
+     */
+    fun sharpened(frame: FrameData.Yuyv422): FrameData.Yuyv422 =
+        FrameData.Yuyv422(frame.width, frame.height, ByteArray(frame.bytes.size))
+            .also { applyTo(frame, it.bytes) }
+
+    /**
+     * Sharpens [frame] into [dst], which must be at least as long as `frame.bytes` and may be
+     * `frame.bytes` itself (that is [apply]). Every byte is written exactly once — chroma copied
+     * straight through, luma sharpened — so sharpening into a fresh array costs no more than a
+     * `copyOf` would have on its own, and the source is never modified.
+     */
+    fun applyTo(frame: FrameData.Yuyv422, dst: ByteArray) {
         val w = frame.width
         val h = frame.height
         val bytes = frame.bytes
+        require(dst.size >= bytes.size) { "dst (${dst.size}) shorter than the frame (${bytes.size})" }
         val n = w * h
-        if (w <= 0 || h <= 0 || bytes.size < n * 2) return
+        // A short or degenerate frame is a driver's doing, not a caller bug: pass it through rather
+        // than throw on the frame thread, but never leave dst holding stale bytes.
+        if (w <= 0 || h <= 0 || bytes.size < n * 2) {
+            if (dst !== bytes) bytes.copyInto(dst)
+            return
+        }
         val src = scratch(n)
         for (p in 0 until n) src[p] = bytes[p * 2].toInt() and 0xFF
         val amount = amount256()
@@ -52,9 +77,11 @@ class Sharpener(strength: Float = DEFAULT_STRENGTH) {
         for (y in 0 until h) for (x in 0 until w) {
             val v = src[p]
             val d = (amount * (v - blur(src, w, h, x, y)) + ROUND) shr SHIFT
-            if (d != 0) bytes[p * 2] = clamp(v + d).toByte()
+            dst[p * 2] = (if (d == 0) v else clamp(v + d)).toByte()
+            dst[p * 2 + 1] = bytes[p * 2 + 1]
             p++
         }
+        if (dst !== bytes && bytes.size > n * 2) bytes.copyInto(dst, n * 2, n * 2, bytes.size)
     }
 
     /**

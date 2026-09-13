@@ -38,13 +38,10 @@ object ImageTransforms {
         }
         is FrameData.Yuyv422 -> {
             val denoised = yuvDenoiser?.apply(data)
-            val filtered = when {
-                sharpener == null -> denoised ?: data
-                // Sharpener.apply writes in place: only ever on the denoiser's fresh output, or on
-                // a copy of our own — never on the driver's read buffer.
-                else -> (denoised ?: FrameData.Yuyv422(data.width, data.height, data.bytes.copyOf()))
-                    .also(sharpener::apply)
-            }
+            // Sharpen into a frame of our own, never in place: the driver owns its read buffer, and
+            // the denoiser keeps the array it returned as its previous-frame state, so writing to
+            // it would feed the sharpener's overshoot back into the next blend.
+            val filtered = if (sharpener == null) denoised ?: data else sharpener.sharpened(denoised ?: data)
             yuyvToImage(filtered)
         }
     }

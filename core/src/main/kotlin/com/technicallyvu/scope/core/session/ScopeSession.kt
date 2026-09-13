@@ -321,11 +321,11 @@ class ScopeSession(
         if (yuv == null) return null
         val denoised = denoiser?.apply(yuv)
         val s = sharpener ?: return denoised
-        // Sharpener.apply writes in place: never on the driver's own read buffer, only on the
-        // denoiser's freshly allocated output or a copy of our own.
-        val target = denoised ?: FrameData.Yuyv422(yuv.width, yuv.height, yuv.bytes.copyOf())
-        s.apply(target)
-        return target
+        // Sharpen into a frame of our own, never in place. Neither input is ours to write: the
+        // driver owns its read buffer, and the denoiser keeps the array it just returned as its
+        // previous-frame state, so sharpening it would feed every frame's overshoot into the next
+        // blend (see TemporalDenoiser.apply). One fresh array per frame, written exactly once.
+        return s.sharpened(denoised ?: yuv)
     }
 
     private fun onFrame(frame: Frame, stats: StreamStats) {

@@ -75,6 +75,43 @@ class SharpenerTest {
     }
 
     @Test
+    fun `sharpening into a new frame leaves the source untouched`() {
+        // The frame path hands the sharpener buffers it does not own -- the driver's read buffer,
+        // or the array the denoiser keeps as its previous-frame state. Neither may come back
+        // changed, so the picture the driver produced must survive a sharpen pass byte for byte.
+        val source = edge()
+        val before = source.bytes.copyOf()
+        val out = Sharpener(1.0f).sharpened(source)
+        assertTrue(source.bytes.contentEquals(before), "the source frame must not be written")
+        assertTrue(out.bytes !== source.bytes, "the result must be an array of its own")
+        assertTrue(!out.bytes.contentEquals(before), "...and it must actually be sharpened, or this proves nothing")
+        assertEquals(before.size, out.bytes.size)
+
+        val dst = ByteArray(source.bytes.size)
+        Sharpener(1.0f).applyTo(source, dst)
+        assertTrue(source.bytes.contentEquals(before), "applyTo must not write its source either")
+        assertTrue(dst.contentEquals(out.bytes), "applyTo and sharpened must produce the same picture")
+    }
+
+    @Test
+    fun `sharpening the denoiser's output does not alter the denoiser's history`() {
+        // Two identical frames: with the history intact, frame 2 out == frame 1 out and a third
+        // identical frame gives the same again. Were the sharpener writing in place on the array
+        // TemporalDenoiser.apply returned, that array *is* the history, so the next blend would
+        // start from the sharpened picture and the output would ring instead of settling.
+        val d = TemporalDenoiser(1.0f)
+        d.apply(edge())
+        val second = d.apply(edge())
+        val sharp = Sharpener(1.0f).sharpened(second)
+        assertTrue(!sharp.bytes.contentEquals(second.bytes), "the edge must really be sharpened, or this proves nothing")
+        val third = d.apply(edge())
+        assertTrue(
+            third.bytes.contentEquals(second.bytes),
+            "a static scene must converge, not ring: got ${third.bytes.joinToString()} vs ${second.bytes.joinToString()}",
+        )
+    }
+
+    @Test
     fun `the argb variant sharpens luma and leaves alpha alone`() {
         val px = IntArray(w * h) { i ->
             val x = i % w
