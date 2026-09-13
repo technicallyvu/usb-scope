@@ -316,3 +316,15 @@ Anthony's decisions; this phase ships a clearly-labelled placeholder icon.
 - **Verification.** Unit tests for the core settings plumbing; the app is exercised in replay mode on an
   Android emulator (API 36) with screenshots of each screen recorded in `.superpowers/re/frames/` and a summary
   in `docs/phase3b-notes.md`; Anthony reviews on the phone later.
+
+### Amendment (2026-09-13): two §14 items as built
+
+- **Double-press window slider: 0.5–3.0 s**, not the 1.0–2.5 s above. The session already accepts
+  500 ms–5 s, and both ends of the narrower range turned out to be reachable without meaning to: a fast
+  double-tap lands under 1.0 s, a deliberate or gloved one can run past 2.5 s. Documented on
+  `WINDOW_MIN_MS` in `ui/SettingsScreen.kt`.
+- **Per-device orientation is captured, not edited.** "Default rotation and mirror per driver" is not a
+  pair of controls on the settings screen. Rotating or mirroring the *live view* records that device's
+  default (`rememberOrientation()`), and Settings' Devices group lists what is remembered with a Forget
+  button per entry. Setting an orientation by looking at the picture is the only way to know it is right,
+  and it removes two controls that could disagree with the live view.

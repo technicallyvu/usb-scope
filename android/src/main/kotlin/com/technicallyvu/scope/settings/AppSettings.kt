@@ -137,7 +137,17 @@ class AppSettings(private val prefs: SharedPreferences) {
             return result
         }
 
+        /**
+         * The inverse of [parseDefaults], and deliberately symmetric with it: an id outside
+         * [DRIVER_ID_RE] is dropped here rather than written and then silently lost on the next
+         * load — or, if it contained a [FIELD_SEPARATOR] or an [ENTRY_SEPARATOR], written and then
+         * *corrupting its neighbour* on the next load. Escaping was the alternative; dropping keeps
+         * one regex as the single definition of a legal id, and nothing but a driver id from the
+         * registry ever reaches this map.
+         */
         private fun serializeDefaults(defaults: Map<String, DriverDefault>): String =
-            defaults.entries.joinToString(ENTRY_SEPARATOR) { (id, d) -> "$id$FIELD_SEPARATOR${d.rotation}$FIELD_SEPARATOR${d.mirror}" }
+            defaults.entries
+                .filter { DRIVER_ID_RE.matches(it.key) }
+                .joinToString(ENTRY_SEPARATOR) { (id, d) -> "$id$FIELD_SEPARATOR${d.rotation}$FIELD_SEPARATOR${d.mirror}" }
     }
 }

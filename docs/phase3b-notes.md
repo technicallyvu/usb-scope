@@ -79,9 +79,31 @@ still passes on debug and release.
   labelled "Forget" implies. It does not snap the *currently streaming* picture back — the session
   only consults overrides at open.
 
-- **About's back always returns to Live**, including when About was opened from Settings. Navigation
-  is a single `Screen` enum with no back stack; a two-deep stack for one screen pair would be more
-  machinery than the case is worth.
+- **About's back returns wherever About was opened from.** Navigation is still a single flat
+  `Screen` enum — a general back stack for three destinations would be more machinery than the case
+  is worth — but the one pair that needs it carries its origin instead: `navigate()` records
+  `UiState.returnTo` when it moves to `Trust`, and the About screen's back arrow and back gesture
+  both route to that. Opened from the controls sheet it returns to Live; opened from Settings' "About
+  this app" row it returns to Settings, which is what a one-way door out of a settings list reads as
+  a bug for.
+
+- **Any cable-button event brings the live view forward.** The button keeps working behind Settings
+  and About — the session never stops — so before this the reverse of the `enabled = !recording`
+  guards was wide open: a double-press from the settings screen started writing a clip with nothing
+  on screen saying so, and a single press saved a photo with no flash, no toast and no haptic. The
+  rule is one pure function, `screenAfterButtonEvent(current)`, pinned by a unit test: whatever is
+  showing, a button event lands on Live, because every sign that the press happened — REC badge,
+  shutter flash, "Saved" toast, snackbar — lives there. Navigating also drops any pending message,
+  so a snackbar raised while the user was away is not replayed, stale, on their return.
+
+  The feedback state this needs (the haptic tick already answered, the flash animation and its tick,
+  the auto-hide interaction counter) is hoisted **above** `ScopeScreen`'s destination switch. Held
+  inside the live subtree it would be re-seeded by the very navigation the press performs, and the
+  press that brought the user back would arrive with its buzz and its flash already spent; seeded
+  once on first entry instead, it would replay the last snapshot's flash on every return from
+  Settings. So `ShutterFlash` is now a pure drawing composable over an alpha from
+  `rememberShutterFlashAlpha`, which tracks the tick it has *answered* rather than the one it
+  entered on.
 
 - **"Permissions requested: 0" now excludes app-private signature permissions.**
   `PackageInfo.requestedPermissions` carries the merged manifest, which includes AndroidX's injected
@@ -156,15 +178,26 @@ Tests: 44 Android unit tests green (`AppSettingsTest` 5, `SettingsWiringTest` 6,
 - **The replay-fixture asset *path* string is compiled into `src/main`,** so it lands in the release
   DEX even though the asset itself is `src/debug` only; the unreachable `DevSheet` class bytes ship
   for the same reason (`isMinifyEnabled = false`). An R8 pass or a debug source set clears both.
-- **A snackbar raised while Settings or About is showing is never consumed.** The host lives on the
-  live screen. This wants a real decision about where a snackbar lives across destinations, not a
-  patch. The permission button and the snackbar host also sit outside the auto-hide fade.
+- **A snackbar raised while Settings or About is showing is still not *shown* there.** The host
+  lives on the live screen. It is no longer replayed stale on the way back — `navigate()` drops the
+  message, and a cable-button event returns to Live before raising one — but a message from some
+  future off-screen source would simply be lost. Where a snackbar lives across destinations wants a
+  real decision, not a patch. The permission button and the snackbar host also sit outside the
+  auto-hide fade.
 - **The wide-layout rail has not been seen on a real tablet or fold.** Both emulator widths were
   portrait phones, so the Fold-open rail is verified by construction and by the scroll modifier only.
 - **Smaller nits:** a dismissed tips card leaves an 8 dp gap in the bottom column's `spacedBy`; the
-  version line has a ripple and a "button" role for a tap that does nothing (debug only);
-  `keepScreenOn` recomputes once per frame before `stateIn` conflates it; `serializeDefaults` does
-  not validate what `parseDefaults` will accept.
+  version line has a ripple and a "button" role for a tap that does nothing (debug only).
+  (`keepScreenOn` no longer recomputes per frame — it combines the preference with a
+  `distinctUntilChanged` "is streaming" boolean — and `serializeDefaults` now writes only what
+  `parseDefaults` will accept, with a round-trip test.)
+
+- **Landscape is capped and scrolled, not redesigned.** On a short window (a landscape phone at
+  ~360 dp tall, still Medium-width and so still on the compact sheet) the bottom column no longer
+  overflows upward over the status chip: it is capped at 60 % of the window height and scrolls in
+  reverse, so the controls sheet is what stays put and the tips card is what you scroll to. Verified
+  at 2400 × 1080 (`.superpowers/re/frames/final/12-landscape.png`). A landscape layout that actually
+  uses the width — the rail, say, at Medium as well as Expanded — is a design question for the phone.
 - **None of this has run on hardware.** The whole round — chrome, settings, tips, orientation memory,
   the icon at real density, dark mode against a real scope picture — is still pending on the Fold 7,
   along with everything already listed in `docs/phase3a-notes.md` under "Hardware verification still

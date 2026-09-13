@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
@@ -179,7 +180,12 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                     // The two tappable lines on this screen carry the theme's primary colour, so
                     // "this opens a browser" is visible without relying on the tap to discover it.
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { openLink(context, sourceUrl) },
+                    // Same 48 dp minimum as the version line above: a bodyMedium line box is ~20 dp,
+                    // and the plan's global constraint applies to a link as much as to a button.
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clickable(role = Role.Button) { openLink(context, sourceUrl) }
+                        .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
             item { HorizontalDivider() }
@@ -191,7 +197,10 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                         a.name,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { openLink(context, a.url) },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clickable(role = Role.Button) { openLink(context, a.url) }
+                            .wrapContentHeight(Alignment.CenterVertically),
                     )
                     Text(
                         stringResource(R.string.about_attribution_detail_format, a.license, a.note),

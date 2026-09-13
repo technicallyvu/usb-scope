@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -30,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -41,6 +45,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -56,11 +61,20 @@ import com.technicallyvu.scope.ui.components.ShutterFlash
 import com.technicallyvu.scope.ui.components.SnapshotToast
 import com.technicallyvu.scope.ui.components.StatusChip
 import com.technicallyvu.scope.ui.components.TipsCard
+import com.technicallyvu.scope.ui.components.rememberShutterFlashAlpha
 import com.technicallyvu.scope.ui.components.toConnStatus
 import kotlinx.coroutines.delay
 
 /** How long the controls stay up after the last interaction, while streaming. */
 private const val AUTO_HIDE_MILLIS = 4_000L
+
+/**
+ * The most of the window height the bottom chrome (tips card, toast, permission button, snackbar,
+ * sheet) may occupy before it starts scrolling. A landscape phone is ~360 dp tall, where the
+ * undismissed tips card and the 126 dp sheet together overflow the window; the cap keeps the
+ * "no picture" prompt a share of the screen instead of squeezing it to nothing.
+ */
+private const val BOTTOM_CHROME_MAX_FRACTION = 0.6f
 
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
@@ -70,6 +84,23 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     // than crashing on a cast.
     val activity = LocalActivity.current
     val wide = if (activity == null) false else calculateWindowSizeClass(activity).widthSizeClass == WindowWidthSizeClass.Expanded
+
+    // Cable-button feedback is hoisted above the destination switch below, because the view model
+    // navigates back to the live view on every button event (ScopeViewModel.screenAfterButtonEvent)
+    // and that rebuilds the live subtree. State remembered *inside* it would be re-seeded from the
+    // already-bumped tick, so the press that brought the user back would arrive with its buzz and
+    // its flash already spent. `interactions` rides along for the same reason: a snapshot has to
+    // count as an interaction whichever screen it was taken from.
+    var interactions by remember { mutableIntStateOf(0) }
+    val onInteract: () -> Unit = remember { { interactions++ } }
+    val haptic = LocalHapticFeedback.current
+    var answeredHapticTick by remember { mutableLongStateOf(ui.hapticTick) }
+    LaunchedEffect(ui.hapticTick) {
+        if (ui.hapticTick == answeredHapticTick) return@LaunchedEffect
+        answeredHapticTick = ui.hapticTick
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+    val flashAlpha = rememberShutterFlashAlpha(ui.flashTick, onFlash = onInteract)
 
     // Remembered, not `vm::navigate`: a method reference is a fresh instance on every
     // recomposition, and this screen recomposes per frame, which would recompose all of
@@ -93,7 +124,15 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                     null
                 }
             }
-            TrustScreen(onBack = onBack, devControls = devControls)
+            // About is reachable from the live view and from Settings, and back has to undo
+            // whichever one it was: `Screen` is flat, so the origin travels in UiState.returnTo.
+            // Keyed on the value, not captured from `ui`, so the lambda stays stable while the
+            // screen recomposes behind the About text.
+            val returnTo = ui.returnTo
+            TrustScreen(
+                onBack = remember(vm, returnTo) { { vm.navigate(returnTo) } },
+                devControls = devControls,
+            )
             return
         }
         Screen.Settings -> {
@@ -111,16 +150,6 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         Screen.Live -> Unit
     }
 
-    // A haptic tick on every cable-button press (single or double). The view model bumps
-    // ui.hapticTick on each button event; the value this composition entered on must not itself
-    // buzz (seeded from the tick, not a boolean, so returning from Settings does not swallow the
-    // next real press).
-    val haptic = LocalHapticFeedback.current
-    val entryHapticTick = remember { ui.hapticTick }
-    LaunchedEffect(ui.hapticTick) {
-        if (ui.hapticTick != entryHapticTick) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    }
-
     // The first-launch tips: up until "Got it" (or a reset from Settings), never over a recording —
     // the REC badge and the elapsed time matter more than advice by then.
     val settings by vm.settings.collectAsState()
@@ -136,25 +165,20 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     // seconds, and a four-second window to read four lines and find "Got it" defeats the point.
     // The card carries its own explicit dismissal, so it is allowed to own the timer until then;
     // one tap on "Got it" restores normal auto-hide behaviour for good.
+    //
+    // A snapshot from any source counts as an interaction too, so the chrome — and with it the
+    // "Saved" toast — comes back for its own four seconds; without that, the primary flow (probe in
+    // one hand, phone propped up, cable button pressed long after the chrome auto-hid) gets the
+    // shutter flash and no confirmation at all. That bump is wired into
+    // `rememberShutterFlashAlpha`'s onFlash above the destination switch, so it survives the
+    // navigation a cable-button snapshot performs.
     val streaming = ui.session.connection is ConnectionState.Streaming
-    var interactions by remember { mutableIntStateOf(0) }
     var chromeVisible by remember { mutableStateOf(true) }
-    val onInteract: () -> Unit = remember { { interactions++ } }
     LaunchedEffect(streaming, interactions, showTips) {
         chromeVisible = true
         if (!streaming || showTips) return@LaunchedEffect
         delay(AUTO_HIDE_MILLIS)
         chromeVisible = false
-    }
-
-    // A snapshot counts as an interaction, so the chrome — and with it the "Saved" toast — comes
-    // back for its own four seconds. Without this the primary flow (probe in one hand, phone
-    // propped up, press the cable button long after the chrome auto-hid) gets the shutter flash and
-    // no confirmation at all. Seeded like the haptic tick above so entering the screen is not
-    // itself an interaction.
-    val entryFlashTick = remember { ui.flashTick }
-    LaunchedEffect(ui.flashTick) {
-        if (ui.flashTick != entryFlashTick) interactions++
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -174,6 +198,10 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     // straight over the prompt.
     var bottomChromePx by remember { mutableIntStateOf(0) }
     val bottomChrome = with(LocalDensity.current) { bottomChromePx.toDp() }
+    // Read from the configuration rather than measured with a BoxWithConstraints: this subtree
+    // recomposes at the stream's frame rate, and a subcomposition per frame is exactly the cost the
+    // rest of this screen was rewritten to avoid.
+    val maxChromeHeight = (LocalConfiguration.current.screenHeightDp * BOTTOM_CHROME_MAX_FRACTION).dp
 
     Box(
         Modifier
@@ -237,10 +265,19 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
                     .padding(end = if (wide) 88.dp else 0.dp)
+                    // A landscape phone is ~360 dp tall and still Medium-width, so it gets the
+                    // compact sheet: the undismissed tips card (~200 dp) plus the 126 dp sheet does
+                    // not fit, and unbounded the column overflowed upward over the status chip.
+                    // Capped and scrolled instead — reversed, so offset zero is the *bottom* and
+                    // the sheet, the only part with controls in it, is what stays put.
                     // Feeds the prompt's bottom padding above. Reported on every size change, so a
                     // dismissed tips card or a hidden sheet immediately gives the prompt its space
-                    // back.
-                    .onSizeChanged { bottomChromePx = it.height },
+                    // back. It has to sit *outside* the two modifiers below: inside the scroll it
+                    // would report the unclamped content height instead of the height actually on
+                    // screen, and the prompt would be padded off the screen entirely.
+                    .onSizeChanged { bottomChromePx = it.height }
+                    .heightIn(max = maxChromeHeight)
+                    .verticalScroll(rememberScrollState(), reverseScrolling = true),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AnimatedVisibility(
@@ -282,7 +319,7 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
             }
         }
 
-        ShutterFlash(ui.flashTick)
+        ShutterFlash(flashAlpha)
     }
 }
 

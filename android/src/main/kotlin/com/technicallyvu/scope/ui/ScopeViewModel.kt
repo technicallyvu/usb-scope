@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -55,11 +57,33 @@ import kotlin.concurrent.thread
 /** Which full-screen destination is showing. */
 enum class Screen { Live, Settings, Trust }
 
+/**
+ * Where a cable-button event (a snapshot, or a double-press record toggle) leaves the user.
+ *
+ * Always the live view, whatever was showing. The button keeps working behind Settings and About —
+ * the session never stops — and every sign that a press happened lives on [Screen.Live]: the REC
+ * badge, the shutter flash, the "Saved" toast and the snackbar host. Without this rule a
+ * double-press from Settings starts writing a clip with nothing on screen saying so, which is the
+ * exact hazard the `enabled = !recording` guards on the Settings and About buttons exist to
+ * prevent.
+ *
+ * A pure function of the current destination rather than an `if` buried in the view model, so the
+ * rule itself is pinned by a plain JVM test.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun screenAfterButtonEvent(current: Screen): Screen = Screen.Live
+
 data class UiState(
     val session: SessionState = SessionState(),
     val image: Bitmap? = null,
     val showStats: Boolean = false,
     val screen: Screen = Screen.Live,
+    /**
+     * Where [Screen.Trust]'s back arrow (and back gesture) returns to. [Screen] is a flat enum with
+     * no back stack, and one screen pair needs one: About opened from Settings must go back to
+     * Settings, not drop the user onto the live view. Set by [ScopeViewModel.navigate].
+     */
+    val returnTo: Screen = Screen.Live,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     /** Bumped with every [message], so the screen can tell two identical consecutive messages
@@ -100,7 +124,15 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
      * Nothing to watch means nothing to keep the screen on for, however the preference reads.
      */
     val keepScreenOn: StateFlow<Boolean> =
-        combine(appSettings.flow, _ui) { s, u -> s.keepScreenOn && u.session.connection is ConnectionState.Streaming }
+        combine(
+            appSettings.flow,
+            // Not _ui itself: it carries a new Bitmap on every frame, so combining it ran this
+            // transform ~30×/s on Main for the view model's whole life. `stateIn` conflated the
+            // result, so nothing downstream churned, but the work was still being done. One
+            // boolean, de-duplicated, leaves the combine idle unless the stream actually starts or
+            // stops.
+            _ui.map { it.session.connection is ConnectionState.Streaming }.distinctUntilChanged(),
+        ) { s, streaming -> s.keepScreenOn && streaming }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Whether the per-second frame-timing log is being written; debug builds only, on by default. */
@@ -174,6 +206,23 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     }
 
     /**
+     * The common prelude to every cable-button event: bring the live view forward (see
+     * [screenAfterButtonEvent]) and buzz. Called from the session worker thread, which
+     * [MutableStateFlow] is safe for.
+     *
+     * The screen change also drops any pending [UiState.message]: the snackbar host only exists on
+     * the live view, so a message raised while the user was elsewhere would be replayed — stale —
+     * the moment they came back. This event's own message (if any) is published after it.
+     */
+    private fun onButtonEvent() {
+        _ui.update {
+            val next = screenAfterButtonEvent(it.screen)
+            if (next == it.screen) it else it.copy(screen = next, returnTo = Screen.Live, message = null)
+        }
+        hapticTick()
+    }
+
+    /**
      * A per-session [FrameSink]. [attach] mints a fresh one (with its own [FrameBitmaps]) for
      * every [ScopeSession] it creates; [token] lets it recognize when its session has been swapped
      * out (e.g. by a replay start/stop) and ignore any frames/button events still in flight from
@@ -237,13 +286,13 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
 
         override fun onButtonSnapshot() {
             if (token != currentSessionToken) return
-            hapticTick()
+            onButtonEvent()
             snapshot()
         }
 
         override fun onButtonRecordToggle() {
             if (token != currentSessionToken) return
-            hapticTick()
+            onButtonEvent()
             viewModelScope.launch { toggleRecording(fromButton = true) }
         }
 
@@ -314,7 +363,19 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     fun rotate() { session.rotate(); rememberOrientation() }
     fun toggleMirror() { session.toggleMirror(); rememberOrientation() }
     fun toggleStats() = appSettings.update { it.copy(showStats = !it.showStats) }
-    fun navigate(screen: Screen) = _ui.update { it.copy(screen = screen) }
+    /**
+     * Switches destination, remembering where [Screen.Trust] was entered from so its back arrow can
+     * return there (see [UiState.returnTo]), and dropping any pending [UiState.message]: the
+     * snackbar host lives on the live view only, so a message the user has navigated away from
+     * would otherwise be shown on their return, long after the event it describes.
+     */
+    fun navigate(screen: Screen) = _ui.update {
+        it.copy(
+            screen = screen,
+            returnTo = if (screen == Screen.Trust) it.screen else Screen.Live,
+            message = null,
+        )
+    }
 
     /** Replaces the whole settings object (the settings screen edits a copy and hands it back). */
     fun updateSettings(next: Settings) = appSettings.update { next }

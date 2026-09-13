@@ -80,6 +80,35 @@ class AppSettingsTest {
     }
 
     @Test
+    fun `an id the parser would reject is never written, and its neighbours round-trip`() {
+        val prefs = FakePrefs()
+        val settings = AppSettings(prefs)
+        settings.update {
+            it.copy(
+                defaults = linkedMapOf(
+                    "good-id" to DriverDefault(90, false),
+                    // A field separator, an entry separator, and characters merely outside the
+                    // regex: written verbatim, the first two would corrupt the neighbouring entry
+                    // and the third would simply vanish on the next load.
+                    "bad:id" to DriverDefault(180, true),
+                    "bad;id" to DriverDefault(270, false),
+                    "Bad_Id" to DriverDefault(0, true),
+                    "also-good" to DriverDefault(180, true),
+                ),
+            )
+        }
+        assertEquals("good-id:90:false;also-good:180:true", prefs.store["driver_defaults"])
+
+        // Fresh instance over the same backing store simulates a process restart: what survives is
+        // exactly what the writer kept, with no third entry conjured out of a mangled separator.
+        val reloaded = AppSettings(prefs).flow.value.defaults
+        assertEquals(
+            mapOf("good-id" to DriverDefault(90, false), "also-good" to DriverDefault(180, true)),
+            reloaded,
+        )
+    }
+
+    @Test
     fun `a driver id with characters outside a-z0-9- is skipped, valid entries survive`() {
         val prefs = FakePrefs().apply { store["driver_defaults"] = "Cam 1:90:false;good-id-2:180:true" }
         val settings = AppSettings(prefs)
