@@ -19,6 +19,10 @@
     <string name="status_recording_started">Recording started</string>
     <string name="status_recording_stopped">Recording stopped</string>
     <string name="rec_badge_format">REC %1$s</string>
+    <!-- Status chip with the live frame rate appended (shown while streaming with stats on). -->
+    <string name="status_chip_fps_format">%1$s · %2$.1f fps</string>
+    <!-- Snapshot confirmation toast (thumbnail + this word + the file name). -->
+    <string name="snapshot_saved">Saved</string>
 
     <!-- ===== Live-view prompts (shown in place of the image) ===== -->
     <string name="live_view_no_device">Plug in your endoscope.</string>
@@ -71,6 +75,8 @@
 
     <!-- ===== Settings screen ===== -->
     <string name="settings_title">Settings</string>
+    <!-- Placeholder body shown until Task 4 replaces it with the real settings list. -->
+    <string name="settings_coming_soon">Settings (coming)</string>
     <string name="settings_denoise_label">Denoise</string>
     <string name="settings_denoise_strength_label">Denoise strength</string>
     <string name="settings_double_press_window_label">Double-press window</string>

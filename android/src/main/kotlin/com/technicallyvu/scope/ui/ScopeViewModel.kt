@@ -5,9 +5,11 @@ import android.graphics.Bitmap
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.technicallyvu.scope.BuildConfig
+import com.technicallyvu.scope.R
 import com.technicallyvu.scope.core.driver.DriverRegistry
 import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
@@ -28,6 +30,7 @@ import com.technicallyvu.scope.media.SurfaceRecorder
 import com.technicallyvu.scope.usb.AndroidDeviceSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -36,19 +39,34 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
+
+/** Which full-screen destination is showing. [Settings] is wired up in Task 4. */
+enum class Screen { Live, Settings, Trust }
 
 data class UiState(
     val session: SessionState = SessionState(),
     val image: Bitmap? = null,
     val showStats: Boolean = false,
-    val showTrust: Boolean = false,
+    val screen: Screen = Screen.Live,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
     val replaying: Boolean = false,
     /** Bumped on every cable-button event (snapshot or double-press toggle) so the screen can fire
      * a haptic tick via a `LaunchedEffect(ui.hapticTick)`; the initial value must not itself buzz. */
     val hapticTick: Long = 0L,
+    /** A recording start is in flight (MediaStore + encoder setup); the Record button shows a
+     * spinner and refuses further taps until it clears, either way. */
+    val recordingStarting: Boolean = false,
+    /** [System.nanoTime] of the moment the recorder was published, or null when not recording. */
+    val recordingStartedAtNanos: Long? = null,
+    /** A small thumbnail of the last saved photo, held for three seconds so the screen can confirm
+     * the save, then cleared. */
+    val lastSnapshotThumb: Bitmap? = null,
+    /** Bumped the instant a snapshot is taken so the screen can blink a shutter flash; as with
+     * [hapticTick], the initial value must not itself flash. */
+    val flashTick: Long = 0L,
 )
 
 class ScopeViewModel(app: Application) : AndroidViewModel(app) {
@@ -77,6 +95,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionToken = 0L
     /** The sink of the current session, so main-thread actions can reach its per-stream state. */
     @Volatile private var currentSink: SessionSink? = null
+    /** Identifies the newest snapshot, so an older one's toast timer cannot clear its thumbnail. */
+    private val snapshotGeneration = AtomicLong(0L)
+
+    /** Publishes a formatted resource string as the transient snackbar message. */
+    private fun message(@StringRes id: Int, vararg args: Any) {
+        val text = getApplication<Application>().getString(id, *args)
+        _ui.update { it.copy(message = text) }
+    }
 
     init {
         attach(usbDevices, replaying = false)
@@ -207,7 +233,9 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     fun rotate() = session.rotate()
     fun toggleMirror() = session.toggleMirror()
     fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
-    fun toggleTrust() = _ui.update { it.copy(showTrust = !it.showTrust) }
+    fun navigate(screen: Screen) = _ui.update { it.copy(screen = screen) }
+    /** About on, About off — the same button both ways; anything else returns to the live view. */
+    fun toggleTrust() = _ui.update { it.copy(screen = if (it.screen == Screen.Trust) Screen.Live else Screen.Trust) }
     /**
      * Re-enabling starts from a clean slate. [ScopeSession.setDenoise] builds a fresh YUV denoiser
      * on its own; the shell's ARGB one (for decoded JPEG frames) lives in the sink and is reset
@@ -227,6 +255,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         val shown = lastImage ?: return
         val s = session.state.value
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".jpg"
+        // The blink fires now, not when the file lands: the shutter has to answer the tap, and the
+        // save takes as long as MediaStore takes.
+        _ui.update { it.copy(flashTick = it.flashTick + 1) }
+        // Identifies this snapshot's thumbnail, so a later one's three-second timer cannot clear a
+        // newer thumbnail than the one it was started for. Atomic: cable-button snapshots arrive on
+        // the session's worker thread, on-screen ones on Main.
+        val thumbGeneration = snapshotGeneration.incrementAndGet()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 when {
@@ -242,9 +277,35 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // published, so compressing here while the worker moves on is safe.
                     else -> saver.saveBitmapJpeg(shown, name)
                 }
-            }.onSuccess { session.markSaved(name) }
-             .onFailure { e -> _ui.update { it.copy(message = "Snapshot failed: ${e.message}") } }
+            }.onSuccess {
+                session.markSaved(name)
+                // Scaling touches the bitmap's pixels; do it here on IO, not on Main. `shown` was
+                // published to the UI and is never written again, so reading it is safe.
+                val thumb = runCatching { thumbnailOf(shown) }.getOrNull()
+                if (thumb != null) {
+                    _ui.update { it.copy(lastSnapshotThumb = thumb) }
+                    viewModelScope.launch {
+                        delay(SNAPSHOT_TOAST_MILLIS)
+                        // A newer snapshot owns the thumbnail now; leave it its full three seconds.
+                        if (snapshotGeneration.get() == thumbGeneration) _ui.update { it.copy(lastSnapshotThumb = null) }
+                    }
+                }
+            }.onFailure { e -> message(R.string.error_snapshot_failed_format, e.message.orEmpty()) }
         }
+    }
+
+    /**
+     * A copy of [src] scaled to fit inside [THUMB_MAX_PX] on its longer side, aspect preserved.
+     * Returns null for a degenerate bitmap rather than letting `createScaledBitmap` throw.
+     */
+    private fun thumbnailOf(src: Bitmap): Bitmap? {
+        val w = src.width
+        val h = src.height
+        if (w <= 0 || h <= 0) return null
+        val scale = minOf(1f, THUMB_MAX_PX.toFloat() / maxOf(w, h).toFloat())
+        val tw = maxOf(1, (w * scale).toInt())
+        val th = maxOf(1, (h * scale).toInt())
+        return Bitmap.createScaledBitmap(src, tw, th, true)
     }
 
     /**
@@ -272,14 +333,17 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
+        // The spinner goes up before the IO hop and comes down in the finally below, whichever way
+        // the start ends — published, refused or thrown.
+        _ui.update { it.copy(recordingStarting = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val img = lastImage ?: return@launch
                 val generation = synchronized(recorderLock) { recorderGeneration }
                 val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
-                val video = runCatching { saver.createVideo(name) }.getOrElse { e -> _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                val video = runCatching { saver.createVideo(name) }.getOrElse { e -> message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 val created = runCatching { SurfaceRecorder(getApplication(), video.fd, img.width, img.height) }
-                    .getOrElse { e -> saver.finishVideo(video, keep = false); _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                    .getOrElse { e -> saver.finishVideo(video, keep = false); message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 synchronized(recorderLock) {
                     if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
                     recorder = created
@@ -288,11 +352,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // can never observe recorder != null with recording still false and auto-stop
                     // the recording that was just started.
                     session.setRecording(true)
+                    // The REC badge counts from here: the moment the encoder actually took over.
+                    _ui.update { it.copy(recordingStartedAtNanos = System.nanoTime()) }
                 }
-                if (fromButton) _ui.update { it.copy(message = "Recording started") }
+                if (fromButton) message(R.string.status_recording_started)
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
             } finally {
                 recordingTransition = false
+                _ui.update { it.copy(recordingStarting = false) }
             }
         }
     }
@@ -315,7 +382,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (kept) session.markSaved(video.displayName)
         }
         session.setRecording(false)
-        if (fromButton) _ui.update { it.copy(message = "Recording stopped") }
+        _ui.update { it.copy(recordingStartedAtNanos = null) }
+        if (fromButton) message(R.string.status_recording_stopped)
     }
 
     // ---- USB events from the activity ----
@@ -323,7 +391,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onPermissionResult(granted: Boolean) {
         usbDevices.pendingPermission = null
-        _ui.update { it.copy(permissionDevice = null, message = if (granted) null else "USB permission denied") }
+        val denied = if (granted) null else getApplication<Application>().getString(R.string.status_permission_denied)
+        _ui.update { it.copy(permissionDevice = null, message = denied) }
     }
 
     fun clearMessage() = _ui.update { it.copy(message = null) }
@@ -376,6 +445,10 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val TAG = "ScopeViewModel"
+        /** Longest side of the snapshot thumbnail carried in [UiState.lastSnapshotThumb]. */
+        private const val THUMB_MAX_PX = 96
+        /** How long the "Saved" toast (and its thumbnail) stays up. */
+        private const val SNAPSHOT_TOAST_MILLIS = 3_000L
         val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }
