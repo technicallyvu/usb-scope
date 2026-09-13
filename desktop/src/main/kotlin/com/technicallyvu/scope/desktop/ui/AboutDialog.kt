@@ -1,6 +1,7 @@
 package com.technicallyvu.scope.desktop.ui
 
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,8 @@ import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.rememberDialogState
 import com.technicallyvu.scope.core.TrustInfo
 import com.technicallyvu.scope.desktop.APP_VERSION
+import java.awt.Desktop
+import java.net.URI
 
 /**
  * Read-only "About" window for the desktop dev bench: version, the no-network statement,
@@ -51,6 +54,14 @@ fun AboutDialog(onClose: () -> Unit) {
                         // to point at, so the claim has to be about what this build does.
                         Text(TrustInfo.desktopNoNetworkStatement, style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider()
+                        Text("Support this project", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            TrustInfo.donateUrl,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { openInBrowser(TrustInfo.donateUrl) },
+                        )
+                        HorizontalDivider()
                         Text(TrustInfo.protocolNote, style = MaterialTheme.typography.bodyMedium)
                         Text("Attributions", style = MaterialTheme.typography.titleSmall)
                         TrustInfo.attributions.forEach { a ->
@@ -72,5 +83,17 @@ fun AboutDialog(onClose: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Hands [url] to the desktop browser. A headless JVM, or a Linux session with no BROWSE support,
+ * makes this a no-op rather than an exception: the URL stays on screen as text to copy, which must
+ * never be worth crashing the dev bench over.
+ */
+private fun openInBrowser(url: String) {
+    runCatching {
+        val desktop = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
+        if (desktop?.isSupported(Desktop.Action.BROWSE) == true) desktop.browse(URI(url))
     }
 }

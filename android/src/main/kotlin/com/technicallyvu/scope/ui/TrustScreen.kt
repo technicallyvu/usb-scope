@@ -177,7 +177,7 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                 Text(
                     sourceUrl,
                     style = MaterialTheme.typography.bodyMedium,
-                    // The two tappable lines on this screen carry the theme's primary colour, so
+                    // Every tappable line on this screen carries the theme's primary colour, so
                     // "this opens a browser" is visible without relying on the tap to discover it.
                     color = MaterialTheme.colorScheme.primary,
                     // Same 48 dp minimum as the version line above: a bodyMedium line box is ~20 dp,
@@ -187,6 +187,33 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                         .clickable(role = Role.Button) { openLink(context, sourceUrl) }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
+            }
+            item {
+                // Directly under the source link, and deliberately the same shape: a heading, one
+                // line of prose, and the URL itself as the tappable text. Opening it is an
+                // ACTION_VIEW intent handed to the browser, so it adds no permission — the count
+                // above stays 0.
+                val donateUrl = stringResource(R.string.donate_url)
+                Column {
+                    Text(
+                        stringResource(R.string.about_support_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        stringResource(R.string.about_support_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        donateUrl,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clickable(role = Role.Button) { openLink(context, donateUrl) }
+                            .wrapContentHeight(Alignment.CenterVertically),
+                    )
+                }
             }
             item { HorizontalDivider() }
             item { Text(protocolNote, style = MaterialTheme.typography.bodyMedium) }

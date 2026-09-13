@@ -61,6 +61,7 @@ been seen; the Fold 7 uses a different mask, and Android 13 themed icons are sti
 replace source_url, push tags v0.1.0-bench, v0.2.0-android, v0.3.0-features, v0.3.1-polish), one-hour legal
 review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` by
 `art/tools/make_icon.py` from `art/icon-source.png`, so regenerate it only if the artwork changes.
+Point the donation URL (`donate_url` in strings.xml and `TrustInfo.donateUrl`) at the real page (Ko-fi / GitHub Sponsors) before release.
 
 ## Launch prep (Claude)
 Release signing, minify rules, store listing text and screenshots, F-Droid metadata, About screen links, help text.
