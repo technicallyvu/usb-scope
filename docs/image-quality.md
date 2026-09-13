@@ -44,6 +44,7 @@ written up in [phase3a-notes.md](phase3a-notes.md).
 ## Sharpening
 
 Off by default; Settings → Image → **Sharpen picture**, with a strength slider (default 50 %).
+Anthony compared off/on on the Fold 7 with the real scope (2026-09-13) and settled on 50 %.
 
 - **What it is.** A luma-only unsharp mask: each pixel's brightness is compared to the average of its 3x3
   neighbourhood, and the difference is added back — `y' = clamp(y + amount * (y - blur(y)))`, with
