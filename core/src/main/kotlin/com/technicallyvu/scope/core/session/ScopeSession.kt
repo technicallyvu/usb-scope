@@ -5,6 +5,7 @@ import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.FrameSource
 import com.technicallyvu.scope.core.driver.StreamStats
+import com.technicallyvu.scope.core.image.Sharpener
 import com.technicallyvu.scope.core.image.TemporalDenoiser
 import com.technicallyvu.scope.core.usb.DeviceRef
 import com.technicallyvu.scope.core.usb.DeviceSource
@@ -41,6 +42,12 @@ data class SessionState(
     val lastSaved: String? = null,
     val denoise: Boolean = true,
     val denoiseStrength: Float = 0.6f,
+    /**
+     * Cosmetic luma unsharp mask, applied *after* [denoise]. Off by default: the camera's 320x240 is
+     * all there is, and sharpening only makes edges read as crisper — it recovers no detail.
+     */
+    val sharpen: Boolean = false,
+    val sharpenStrength: Float = Sharpener.DEFAULT_STRENGTH,
     /** The currently-streaming driver's id, or null when no session is [ConnectionState.Streaming]. */
     val driverId: String? = null,
 )
@@ -91,6 +98,8 @@ class ScopeSession(
 
     @Volatile private var job: Job? = null
     @Volatile private var denoiser: TemporalDenoiser? = TemporalDenoiser()
+    /** Null while sharpening is off; see [setSharpen]. Stateless apart from a scratch buffer. */
+    @Volatile private var sharpener: Sharpener? = null
     // Written from the session coroutine on every open, and cleared from any thread by
     // clearDefaultOverride (a settings screen), hence volatile.
     @Volatile private var lastDriverId: String? = null
@@ -184,6 +193,18 @@ class ScopeSession(
         val clamped = strength.coerceIn(MIN_DENOISE_STRENGTH, MAX_DENOISE_STRENGTH)
         denoiser = if (enabled) (denoiser?.also { it.strength = clamped } ?: TemporalDenoiser(clamped)) else null
         _state.update { it.copy(denoise = enabled, denoiseStrength = clamped) }
+    }
+
+    /**
+     * Turns the cosmetic sharpener on/off and/or updates its [strength] (clamped to
+     * [MIN_SHARPEN_STRENGTH]..[MAX_SHARPEN_STRENGTH]). Mirrors [setDenoise]: an existing sharpener
+     * has its strength updated live, and the clamped strength is recorded in state even while
+     * sharpening is off, so a later `setSharpen(true)` picks it back up.
+     */
+    fun setSharpen(enabled: Boolean, strength: Float = state.value.sharpenStrength) {
+        val clamped = strength.coerceIn(MIN_SHARPEN_STRENGTH, MAX_SHARPEN_STRENGTH)
+        sharpener = if (enabled) (sharpener?.also { it.strength = clamped } ?: Sharpener(clamped)) else null
+        _state.update { it.copy(sharpen = enabled, sharpenStrength = clamped) }
     }
 
     /**
@@ -288,12 +309,29 @@ class ScopeSession(
         }
     }
 
+    /**
+     * The image filters, in the only order that makes sense: **denoise first, then sharpen**. An
+     * unsharp mask amplifies exactly the high-frequency content sensor grain lives in, so sharpening
+     * a raw frame and denoising afterwards would spend the denoiser's effort undoing the sharpener's.
+     *
+     * Returns null when there is nothing to do (a non-YUYV frame, or both filters off), in which
+     * case the caller delivers the driver's own frame untouched.
+     */
+    private fun filter(yuv: FrameData.Yuyv422?): FrameData.Yuyv422? {
+        if (yuv == null) return null
+        val denoised = denoiser?.apply(yuv)
+        val s = sharpener ?: return denoised
+        // Sharpener.apply writes in place: never on the driver's own read buffer, only on the
+        // denoiser's freshly allocated output or a copy of our own.
+        val target = denoised ?: FrameData.Yuyv422(yuv.width, yuv.height, yuv.bytes.copyOf())
+        s.apply(target)
+        return target
+    }
+
     private fun onFrame(frame: Frame, stats: StreamStats) {
         _state.update { it.copy(stats = stats) }
-        val delivered = denoiser?.let { d ->
-            (frame.data as? FrameData.Yuyv422)?.let { yuv ->
-                Frame(d.apply(yuv), frame.timestampNanos, frame.buttonPressed, frame.cameraNumber, frame.sensorValue)
-            }
+        val delivered = filter(frame.data as? FrameData.Yuyv422)?.let { filtered ->
+            Frame(filtered, frame.timestampNanos, frame.buttonPressed, frame.cameraNumber, frame.sensorValue)
         } ?: frame
         // Only Exception is swallowed (never Error, never cancellation): the shell owns its own error reporting.
         try {
@@ -339,5 +377,7 @@ class ScopeSession(
         const val MAX_DOUBLE_PRESS_WINDOW_NANOS = 5_000_000_000L
         const val MIN_DENOISE_STRENGTH = 0.2f
         const val MAX_DENOISE_STRENGTH = 1.0f
+        const val MIN_SHARPEN_STRENGTH = Sharpener.MIN_STRENGTH
+        const val MAX_SHARPEN_STRENGTH = Sharpener.MAX_STRENGTH
     }
 }
