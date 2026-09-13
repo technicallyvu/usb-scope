@@ -212,11 +212,14 @@ Tests: 44 Android unit tests green (`AppSettingsTest` 5, `SettingsWiringTest` 6,
 
 ## Anthony's decisions pending
 
-- **The product name.** "USB Scope" is a placeholder throughout — `app_name`, the media folder name
-  (`translatable="false"`, because a translated album name would orphan everything already saved),
-  the tips card and the README all use it. Changing it after release orphans saved media, so it is
-  worth settling before the Play listing.
-- ~~**The launcher icon.**~~ Settled after 3b: an all-vector adaptive icon with a monochrome layer.
+- ~~**The product name.**~~ Decided 2026-09-13: **USB Scope**, the name already used for `app_name`,
+  the media folder (`translatable="false"`, because a translated album name would orphan saved media),
+  the tips card and the README. Checked the same day: no Google Play app carries that exact title, the
+  term appears on hardware listings only as a description (so it is a weak mark, which is acceptable for
+  an open-source app), usbscope.com is taken, usbscope.app had no DNS record. "Scope Cam" was rejected
+  because ScopeCam is already a camera product name (Futudent, RunCam). Suggested store title:
+  "USB Scope: Endoscope Camera".
+- ~~**The launcher icon.**~~ Decided 2026-09-13: Anthony's own render, see `art/tools/make_icon.py`.
 - **Where the stats toggle belongs.** It is currently both a button in the controls sheet and a
   switch in Settings, backed by the same preference. That is one of eight sheet buttons spent on a
   debug-flavoured overlay; if it moves to Settings only, the sheet drops to seven and the two-row

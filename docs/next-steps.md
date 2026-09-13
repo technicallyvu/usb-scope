@@ -57,11 +57,10 @@ dark mode against a real picture, and the launcher icon on a real launcher (only
 been seen; the Fold 7 uses a different mask, and Android 13 themed icons are still unverified).
 
 ## Launch prep (Anthony)
-Name + USPTO check ("USB Scope" is a placeholder and appears in the media folder name, so changing it after
-release orphans saved media), D-U-N-S, Play developer account, privacy policy page, GitHub repository (then
+~~Name~~ (decided 2026-09-13: USB Scope; a USPTO search is still worth one look before the listing goes live), D-U-N-S, Play developer account, privacy policy page, GitHub repository (then
 replace source_url, push tags v0.1.0-bench, v0.2.0-android, v0.3.0-features, v0.3.1-polish), one-hour legal
-review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` from
-`art/icon-play-512.svg`, so swap it only if the artwork changes.
+review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` by
+`art/tools/make_icon.py` from `art/icon-source.png`, so regenerate it only if the artwork changes.
 
 ## Launch prep (Claude)
 Release signing, minify rules, store listing text and screenshots, F-Droid metadata, About screen links, help text.
