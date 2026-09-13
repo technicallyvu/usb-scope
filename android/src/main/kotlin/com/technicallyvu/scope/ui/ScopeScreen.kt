@@ -1,7 +1,6 @@
 package com.technicallyvu.scope.ui
 
 import android.hardware.usb.UsbDevice
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -20,10 +19,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -78,7 +75,15 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
             return
         }
         Screen.Settings -> {
-            SettingsPlaceholder(onBack = onBack)
+            // Same reasoning as onBack: stable callbacks (and an unchanged Settings instance) let
+            // Compose skip the whole settings subtree while frames keep arriving behind it.
+            val settings by vm.settings.collectAsState()
+            SettingsScreen(
+                settings = settings,
+                onChange = remember(vm) { vm::updateSettings },
+                onBack = onBack,
+                onAbout = remember(vm) { { vm.navigate(Screen.Trust) } },
+            )
             return
         }
         Screen.Live -> Unit
@@ -274,24 +279,4 @@ private fun StatsOverlay(st: StreamStats) {
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.background(Color(0x99000000)).padding(6.dp),
     )
-}
-
-/**
- * Stand-in for the real settings list, which Task 4 adds. Present so the Settings button in the
- * controls sheet navigates somewhere it can also come back from.
- */
-@Composable
-private fun SettingsPlaceholder(onBack: () -> Unit) {
-    BackHandler(enabled = true, onBack = onBack)
-    Column(Modifier.fillMaxSize()) {
-        Surface(tonalElevation = 2.dp) {
-            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.titleLarge)
-                OutlinedButton(onClick = onBack, modifier = Modifier.padding(top = 8.dp)) {
-                    Text(stringResource(R.string.action_back))
-                }
-            }
-        }
-        Text(stringResource(R.string.settings_coming_soon), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyMedium)
-    }
 }

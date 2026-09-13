@@ -7,6 +7,8 @@ import android.hardware.usb.UsbManager
 import android.util.Log
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
@@ -27,12 +29,20 @@ import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.media.FrameBitmaps
 import com.technicallyvu.scope.media.MediaStoreSaver
 import com.technicallyvu.scope.media.SurfaceRecorder
+import com.technicallyvu.scope.settings.AppSettings
+import com.technicallyvu.scope.settings.DriverDefault
+import com.technicallyvu.scope.settings.SessionSettingsTarget
+import com.technicallyvu.scope.settings.Settings
+import com.technicallyvu.scope.settings.SettingsApplier
 import com.technicallyvu.scope.usb.AndroidDeviceSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,7 +52,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
-/** Which full-screen destination is showing. [Settings] is wired up in Task 4. */
+/** Which full-screen destination is showing. */
 enum class Screen { Live, Settings, Trust }
 
 data class UiState(
@@ -69,15 +79,32 @@ data class UiState(
     val flashTick: Long = 0L,
 )
 
-class ScopeViewModel(app: Application) : AndroidViewModel(app) {
+class ScopeViewModel(app: Application, private val appSettings: AppSettings) : AndroidViewModel(app) {
     private val usbManager = app.getSystemService(UsbManager::class.java)
     private val usbDevices = AndroidDeviceSource(usbManager)
     private val saver = MediaStoreSaver(app.contentResolver)
 
-    private val _ui = MutableStateFlow(UiState())
+    // The stats overlay is a persisted preference; the initial UI state has to agree with the store
+    // before the settings collector below has run even once.
+    private val _ui = MutableStateFlow(UiState(showStats = appSettings.flow.value.showStats))
     val ui: StateFlow<UiState> = _ui
 
+    /** The persisted preferences, for the settings screen to render and edit. */
+    val settings: StateFlow<Settings> = appSettings.flow
+
+    /**
+     * Whether the activity should hold the screen awake: the preference AND an actual stream.
+     * Nothing to watch means nothing to keep the screen on for, however the preference reads.
+     */
+    val keepScreenOn: StateFlow<Boolean> =
+        combine(appSettings.flow, _ui) { s, u -> s.keepScreenOn && u.session.connection is ConnectionState.Streaming }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     @Volatile private lateinit var session: ScopeSession
+    /** Pushes settings into the current session; replaced with the session in [attach]. */
+    @Volatile private var applier: SettingsApplier? = null
+    /** The last denoise flag pushed to a session, to spot an off→on transition. */
+    private var lastAppliedDenoise: Boolean? = null
     private var stateJob: Job? = null
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: Bitmap? = null
@@ -106,6 +133,24 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         attach(usbDevices, replaying = false)
+        // One collector for the life of the view model: every settings change (from the settings
+        // screen, from a control that persists, or from a reset) is pushed into whichever session
+        // is current. Sessions created later pick the settings up in [attach] instead.
+        viewModelScope.launch {
+            appSettings.flow.collect { s ->
+                // Off → on: drop the sink's ARGB denoiser history, otherwise the first filtered
+                // frame blends with a picture from before denoise was switched back on.
+                if (s.denoise && lastAppliedDenoise == false) currentSink?.resetDenoisers()
+                lastAppliedDenoise = s.denoise
+                applier?.apply(s)
+                _ui.update { it.copy(showStats = s.showStats) }
+            }
+        }
+    }
+
+    /** Bumps the haptic tick, unless the user turned cable-button vibration off. */
+    private fun hapticTick() {
+        if (appSettings.flow.value.haptics) _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
     }
 
     /**
@@ -162,13 +207,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onButtonSnapshot() {
             if (token != currentSessionToken) return
-            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            hapticTick()
             snapshot()
         }
 
         override fun onButtonRecordToggle() {
             if (token != currentSessionToken) return
-            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            hapticTick()
             viewModelScope.launch { toggleRecording(fromButton = true) }
         }
 
@@ -207,6 +252,12 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         currentSink = sink
         val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = sink)
         session = newSession
+        // Before start(): a fresh session carries none of the user's settings, and the per-driver
+        // rotation/mirror overrides have to be in place before the first device opens, or the first
+        // picture of this session comes up in the driver's own default orientation.
+        val newApplier = SettingsApplier(SessionSettingsTarget(newSession))
+        newApplier.apply(appSettings.flow.value)
+        applier = newApplier
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
         stateJob = viewModelScope.launch {
@@ -230,22 +281,36 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- actions (main thread) ----
-    fun rotate() = session.rotate()
-    fun toggleMirror() = session.toggleMirror()
-    fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
+    fun rotate() { session.rotate(); rememberOrientation() }
+    fun toggleMirror() { session.toggleMirror(); rememberOrientation() }
+    fun toggleStats() = appSettings.update { it.copy(showStats = !it.showStats) }
     fun navigate(screen: Screen) = _ui.update { it.copy(screen = screen) }
+
+    /** Replaces the whole settings object (the settings screen edits a copy and hands it back). */
+    fun updateSettings(next: Settings) = appSettings.update { next }
+
+    /**
+     * Records the orientation the user just chose as this device's default, so the next time the
+     * same endoscope is plugged in its picture comes up the right way round. Reads the session's
+     * state rather than the requested change: [ScopeSession.rotate] and
+     * [ScopeSession.toggleMirror] are no-ops while recording, and a refused change must not be
+     * remembered. Nothing is written while no device is streaming (no driver id to file it under)
+     * or when the value is already the stored one.
+     */
+    private fun rememberOrientation() {
+        val s = session.state.value
+        val driverId = s.driverId ?: return
+        val next = DriverDefault(s.rotation, s.mirror)
+        if (appSettings.flow.value.defaults[driverId] == next) return
+        appSettings.update { it.copy(defaults = it.defaults + (driverId to next)) }
+    }
     /** About on, About off — the same button both ways; anything else returns to the live view. */
     fun toggleTrust() = _ui.update { it.copy(screen = if (it.screen == Screen.Trust) Screen.Live else Screen.Trust) }
     /**
-     * Re-enabling starts from a clean slate. [ScopeSession.setDenoise] builds a fresh YUV denoiser
-     * on its own; the shell's ARGB one (for decoded JPEG frames) lives in the sink and is reset
-     * here, otherwise the first filtered frame would blend with a picture from before the toggle.
+     * Denoise is a persisted preference, so the toggle writes the store and the settings collector
+     * applies it to the session (and resets the sink's ARGB denoiser on an off→on transition).
      */
-    fun toggleDenoise() {
-        val enabled = !session.state.value.denoise
-        if (enabled) currentSink?.resetDenoisers()
-        session.setDenoise(enabled)
-    }
+    fun toggleDenoise() = appSettings.update { it.copy(denoise = !it.denoise) }
 
     fun snapshot() {
         // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
@@ -441,6 +506,15 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             closing.stop()
         }
         super.onCleared()
+    }
+
+    /**
+     * Hands the view model its [AppSettings]. Plain and explicit rather than a DI framework or an
+     * `Application` subclass: there is exactly one dependency and one activity.
+     */
+    class Factory(private val app: Application, private val settings: AppSettings) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = ScopeViewModel(app, settings) as T
     }
 
     companion object {
