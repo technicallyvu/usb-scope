@@ -35,6 +35,8 @@ next time the Fold 7 is on USB.
 - Decide whether the stats toggle belongs in the controls sheet, in Settings only, or both.
 
 ## Features (in rough value order)
+0. Resolution question settled — see `image-quality.md` (native 320x240, never upscaled, optional
+   sharpening); the PC-bench probe for hidden info requests remains optional.
 1. Honest 2x upscale on save (labelled), and digital zoom with pan on the live view.
 2. Freeze frame; brightness/contrast/gamma sliders; black-and-white mode.
 3. Auto-orientation from the phone's sensors (the scope has no gyro); volume buttons as shutter.
