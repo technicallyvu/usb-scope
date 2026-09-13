@@ -43,7 +43,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.R
-import com.technicallyvu.scope.core.driver.DriverRegistry
 import com.technicallyvu.scope.settings.DriverDefault
 import com.technicallyvu.scope.settings.Settings
 import kotlin.math.roundToInt
@@ -275,7 +274,9 @@ private fun SliderRow(
 /** One remembered per-device orientation, with the button that forgets it. */
 @Composable
 private fun DeviceRow(driverId: String, default: DriverDefault, onForget: () -> Unit) {
-    val name = remember(driverId) { DriverRegistry.all.firstOrNull { it.id == driverId }?.displayName ?: driverId }
+    // Never the driver id, and never `core`'s own displayName: both are engineering labels, and
+    // one of them carries a vendor-derived word. See driverNameRes.
+    val name = driverDisplayName(driverId)
     val summary =
         if (default.mirror) stringResource(R.string.settings_device_rotation_mirrored_format, default.rotation)
         else stringResource(R.string.settings_device_rotation_format, default.rotation)

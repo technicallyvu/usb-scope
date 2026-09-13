@@ -22,8 +22,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,7 +37,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
 
 private val ButtonSize = 56.dp
@@ -53,7 +50,7 @@ private val ButtonSize = 56.dp
  * auto-hide timer instead of racing it.
  *
  * Every parameter is a stable primitive rather than the whole `UiState`: that state carries a new
- * `Bitmap` and new `StreamStats` on every frame, so taking it here would recompose nine buttons and
+ * `Bitmap` and new `StreamStats` on every frame, so taking it here would recompose eight buttons and
  * five hand-drawn glyphs at the stream frame rate. With these the sheet skips on the frames where
  * nothing it cares about changed.
  *
@@ -68,7 +65,6 @@ fun ControlsSheet(
     recordingStarting: Boolean,
     denoise: Boolean,
     showStats: Boolean,
-    replaying: Boolean,
     wide: Boolean,
     onInteract: () -> Unit,
     onSnapshot: () -> Unit,
@@ -79,7 +75,6 @@ fun ControlsSheet(
     onToggleStats: () -> Unit,
     onSettings: () -> Unit,
     onAbout: () -> Unit,
-    onToggleReplay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val buttons: @Composable () -> Unit = {
@@ -152,13 +147,6 @@ fun ControlsSheet(
         ) {
             Icon(Icons.Filled.Info, contentDescription = stringResource(R.string.cd_about))
         }
-
-        // Debug-only; Task 5 moves it into the developer sheet.
-        if (BuildConfig.DEBUG) {
-            TextButton(onClick = { onInteract(); onToggleReplay() }) {
-                Text(stringResource(if (replaying) R.string.dev_replay_stop else R.string.dev_replay_start))
-            }
-        }
     }
 
     val shape = if (wide) {
@@ -177,7 +165,7 @@ fun ControlsSheet(
     ) {
         if (wide) {
             Column(
-                // Nine 56 dp buttons are taller than a short landscape window; scroll rather than clip.
+                // Eight 56 dp buttons are taller than a short landscape window; scroll rather than clip.
                 Modifier
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 8.dp),

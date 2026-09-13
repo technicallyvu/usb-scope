@@ -43,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
 import com.technicallyvu.scope.core.driver.StreamStats
 import com.technicallyvu.scope.core.session.ConnectionState
@@ -51,6 +52,7 @@ import com.technicallyvu.scope.ui.components.RecBadge
 import com.technicallyvu.scope.ui.components.ShutterFlash
 import com.technicallyvu.scope.ui.components.SnapshotToast
 import com.technicallyvu.scope.ui.components.StatusChip
+import com.technicallyvu.scope.ui.components.TipsCard
 import com.technicallyvu.scope.ui.components.toConnStatus
 import kotlinx.coroutines.delay
 
@@ -72,7 +74,23 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     val onBack = remember(vm) { { vm.navigate(Screen.Live) } }
     when (ui.screen) {
         Screen.Trust -> {
-            TrustScreen(onBack = onBack)
+            // Null in a release build: this is the only thing that ever constructs a DevControls,
+            // so with it gone the About screen attaches no long-press and DevSheet is never
+            // called. (The class is still compiled into the release APK — minification is off —
+            // but nothing in the UI path can reach it.)
+            val devControls = remember(vm) {
+                if (BuildConfig.DEBUG) {
+                    DevControls(
+                        state = vm.devState,
+                        onToggleReplay = vm::toggleReplay,
+                        onSetLogFrameTiming = vm::setLogFrameTiming,
+                        diagnostics = vm::diagnostics,
+                    )
+                } else {
+                    null
+                }
+            }
+            TrustScreen(onBack = onBack, devControls = devControls)
             return
         }
         Screen.Settings -> {
@@ -123,6 +141,13 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     LaunchedEffect(ui.flashTick) {
         if (ui.flashTick != entryFlashTick) interactions++
     }
+
+    // The first-launch tips: up until "Got it" (or a reset from Settings), never over a recording —
+    // the REC badge and the elapsed time matter more than advice by then — and faded with the rest
+    // of the chrome by the auto-hide timer above.
+    val settings by vm.settings.collectAsState()
+    val showTips = !settings.tipsDismissed && !ui.session.recording
+    val onDismissTips = remember(vm) { vm::dismissTips }
 
     val snackbarHostState = remember { SnackbarHostState() }
     // Keyed on the tick, not the text: two identical messages in a row would otherwise leave the
@@ -178,6 +203,13 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                     .padding(end = if (wide) 88.dp else 0.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                AnimatedVisibility(
+                    visible = chromeVisible && showTips,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    TipsCard(onDismiss = onDismissTips, modifier = Modifier.padding(horizontal = 12.dp))
+                }
                 SnapshotToast(
                     thumb = ui.lastSnapshotThumb,
                     name = ui.session.lastSaved,
@@ -229,7 +261,6 @@ private fun rememberSheetActions(vm: ScopeViewModel): SheetActions = remember(vm
         onToggleStats = vm::toggleStats,
         onSettings = { vm.navigate(Screen.Settings) },
         onAbout = { vm.navigate(Screen.Trust) },
-        onToggleReplay = { if (vm.ui.value.replaying) vm.stopReplay() else vm.startReplay() },
     )
 }
 
@@ -243,7 +274,6 @@ class SheetActions(
     val onToggleStats: () -> Unit,
     val onSettings: () -> Unit,
     val onAbout: () -> Unit,
-    val onToggleReplay: () -> Unit,
 )
 
 /**
@@ -262,7 +292,6 @@ private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: S
         recordingStarting = ui.recordingStarting,
         denoise = ui.session.denoise,
         showStats = ui.showStats,
-        replaying = ui.replaying,
         wide = wide,
         onInteract = onInteract,
         onSnapshot = actions.onSnapshot,
@@ -273,7 +302,6 @@ private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: S
         onToggleStats = actions.onToggleStats,
         onSettings = actions.onSettings,
         onAbout = actions.onAbout,
-        onToggleReplay = actions.onToggleReplay,
     )
 }
 

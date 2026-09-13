@@ -85,7 +85,7 @@ data class UiState(
 class ScopeViewModel(app: Application, private val appSettings: AppSettings) : AndroidViewModel(app) {
     private val usbManager = app.getSystemService(UsbManager::class.java)
     private val usbDevices = AndroidDeviceSource(usbManager)
-    private val saver = MediaStoreSaver(app.contentResolver)
+    private val saver = MediaStoreSaver(app)
 
     // The stats overlay is a persisted preference; the initial UI state has to agree with the store
     // before the settings collector below has run even once.
@@ -102,6 +102,23 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     val keepScreenOn: StateFlow<Boolean> =
         combine(appSettings.flow, _ui) { s, u -> s.keepScreenOn && u.session.connection is ConnectionState.Streaming }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Whether the per-second frame-timing log is being written; debug builds only, on by default. */
+    private val _logFrameTiming = MutableStateFlow(true)
+
+    /**
+     * What the developer sheet renders. Derived from [_ui], which changes on every frame, but a
+     * `StateFlow` drops equal values, so the sheet only recomposes when one of these two actually
+     * flips. `WhileSubscribed` rather than `Eagerly`: nothing should be combining state per frame
+     * for a sheet that is closed, and in a release build never opens at all.
+     */
+    val devState: StateFlow<DevState> =
+        combine(_ui, _logFrameTiming) { u, t -> DevState(u.replaying, t) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(),
+                DevState(replaying = _ui.value.replaying, logFrameTiming = _logFrameTiming.value),
+            )
 
     @Volatile private lateinit var session: ScopeSession
     /** Pushes settings into the current session; replaced with the session in [attach]. */
@@ -183,7 +200,17 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
                 recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
             }
             _ui.update { it.copy(image = shown) }
-            if (BuildConfig.DEBUG) logTiming(t0, state)
+            if (BuildConfig.DEBUG && _logFrameTiming.value) logTiming(t0, state)
+        }
+
+        /**
+         * Drops the current timing window. Called when the log is switched back on, so the first
+         * window after the gap does not report the whole off period as one enormous frame gap.
+         * Best effort: these counters belong to the worker thread and are only ever read there, so
+         * racing it costs at worst one skewed line in a debug log.
+         */
+        fun resetTiming() {
+            lastFrameNanos = 0L; windowStartNanos = 0L; windowFrames = 0; windowMaxGapMs = 0L; windowProcessNanos = 0L
         }
 
         private fun logTiming(t0: Long, state: SessionState) {
@@ -196,7 +223,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             if (now - windowStartNanos >= 1_000_000_000L) {
                 val secs = (now - windowStartNanos) / 1e9
                 Log.d(
-                    TAG,
+                    LOG_TAG,
                     String.format(
                         Locale.ROOT,
                         "timing: %.1f fps  maxGap %d ms  avgProcess %.1f ms  partial %d  dropped %d  driverFps %.1f",
@@ -291,6 +318,9 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
 
     /** Replaces the whole settings object (the settings screen edits a copy and hands it back). */
     fun updateSettings(next: Settings) = appSettings.update { next }
+
+    /** The first-launch tips card was dismissed; Settings can bring it back. */
+    fun dismissTips() = appSettings.update { it.copy(tipsDismissed = true) }
 
     /**
      * Records the orientation the user just chose as this device's default, so the next time the
@@ -485,6 +515,53 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         switchSession { attach(usbDevices, replaying = false) }
     }
 
+    /** Start or stop the replay fixture, whichever the current state calls for (developer sheet). */
+    fun toggleReplay() {
+        if (_ui.value.replaying) stopReplay() else startReplay()
+    }
+
+    /** Switches the per-second frame-timing log on or off (developer sheet, debug builds only). */
+    fun setLogFrameTiming(on: Boolean) {
+        if (_logFrameTiming.value == on) return
+        _logFrameTiming.value = on
+        // Switching it back on starts a fresh window, so the gap while it was off is not reported
+        // as one enormous inter-frame delay.
+        if (on) currentSink?.resetTiming()
+    }
+
+    /**
+     * A short technical dump for a bug report: build, driver, connection and stream statistics.
+     * Sampled when asked for, not maintained; the developer sheet copies it to the clipboard.
+     * The driver's *display* name leads, with the raw id after it — this is the one place the id
+     * itself is worth showing, and the sheet only exists in debug builds.
+     */
+    fun diagnostics(): String {
+        val app = getApplication<Application>()
+        val u = _ui.value
+        val s = u.session
+        val driver = app.getString(
+            R.string.dev_diagnostics_driver_format,
+            app.getString(driverNameRes(s.driverId)),
+            s.driverId.orEmpty(),
+        )
+        val connection = when (val c = s.connection) {
+            is ConnectionState.NoDevice -> app.getString(R.string.status_no_device)
+            is ConnectionState.Connecting -> app.getString(R.string.status_connecting)
+            is ConnectionState.Streaming ->
+                if (u.replaying) app.getString(R.string.status_replaying) else app.getString(R.string.status_streaming)
+            is ConnectionState.Failed -> app.getString(R.string.status_error_prefix, c.message)
+        }
+        val stats = app.getString(
+            R.string.stats_overlay_format,
+            s.stats.fps, s.stats.framesEmitted, s.stats.framesPartial, s.stats.framesDropped, s.stats.bytesReceived / 1e6,
+        )
+        return app.getString(
+            R.string.dev_diagnostics_format,
+            app.getString(R.string.app_name), BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.GIT_SHA,
+            driver, connection, stats,
+        )
+    }
+
     /**
      * Tears the current session down off the main thread, then runs [start] (which calls [attach])
      * back on Main. Nothing here may block Main: the session join waits on an in-flight USB read.
@@ -494,7 +571,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         viewModelScope.launch {
             try {
                 val joined = withContext(Dispatchers.IO) { session.stopAndJoin() }
-                if (!joined) Log.w(TAG, "session did not stop in time")
+                if (!joined) Log.w(LOG_TAG, "session did not stop in time")
                 lastImage = null
                 lastFrame = null
                 start()
@@ -525,7 +602,8 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     }
 
     companion object {
-        private const val TAG = "ScopeViewModel"
+        /** logcat tag for this view model, including the frame-timing log the developer sheet names. */
+        const val LOG_TAG = "ScopeViewModel"
         /** Longest side of the snapshot thumbnail carried in [UiState.lastSnapshotThumb]. */
         private const val THUMB_MAX_PX = 96
         /** How long the "Saved" toast (and its thumbnail) stays up. */
