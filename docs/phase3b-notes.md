@@ -198,10 +198,17 @@ Tests: 44 Android unit tests green (`AppSettingsTest` 5, `SettingsWiringTest` 6,
   reverse, so the controls sheet is what stays put and the tips card is what you scroll to. Verified
   at 2400 × 1080 (`.superpowers/re/frames/final/12-landscape.png`). A landscape layout that actually
   uses the width — the rail, say, at Medium as well as Expanded — is a design question for the phone.
-- **None of this has run on hardware.** The whole round — chrome, settings, tips, orientation memory,
-  the icon at real density, dark mode against a real scope picture — is still pending on the Fold 7,
-  along with everything already listed in `docs/phase3a-notes.md` under "Hardware verification still
-  pending" (UVC, denoise tuning, denoise cost).
+- **Verified on the Fold 7 (2026-09-13, v0.3.1 debug build).** Installed over adb (USB, then
+  adb-over-Wi-Fi because the phone has a single USB-C port and the scope needs it): zero requested
+  system permissions; live view at 10.9 fps with 0 partial frames; the saved orientation for the
+  YUV scope (rotation 180, no mirror) was picked up from the per-device defaults; the controls
+  auto-hid and came back on a tap; a cable-button hold produced the shutter flash, the "Saved" toast
+  and a JPEG in the Gallery folder; a cable-button double-press while the Settings screen was open
+  returned to the live view with the REC badge and started a clip, and a second double-press stopped
+  it (the F1 fix from the branch review, which the emulator could not exercise). No crash in logcat.
+  Still pending on hardware: dark-mode and dynamic-colour judgement is Anthony's; the items in
+  `docs/phase3a-notes.md` under "Hardware verification still pending" (UVC, denoise tuning, denoise
+  cost) are unchanged.
 
 ## Anthony's decisions pending
 
