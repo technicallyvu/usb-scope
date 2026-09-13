@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -47,7 +49,13 @@ import com.technicallyvu.scope.settings.DriverDefault
 import com.technicallyvu.scope.settings.Settings
 import kotlin.math.roundToInt
 
-/** Ends of the double-press window slider, in milliseconds, and its step. */
+/**
+ * Ends of the double-press window slider, in milliseconds, and its step.
+ *
+ * Deliberately 0.5–3.0 s rather than the spec's and plan's 1.0–2.5 s: the session already accepts
+ * 500 ms–5 s, and both ends of the narrower range were reachable in testing — a fast double-tap
+ * lands under 1.0 s and a deliberate, gloved one can run past 2.5 s. See docs/phase3b-notes.md.
+ */
 private const val WINDOW_MIN_MS = 500f
 private const val WINDOW_MAX_MS = 3_000f
 private const val WINDOW_STEP_MS = 100
@@ -215,17 +223,23 @@ private fun HelperText(text: String) {
     )
 }
 
+/**
+ * A label and a switch that are one accessibility node, not two: `toggleable` on the [Row] with a
+ * null `onCheckedChange` on the [Switch] means TalkBack announces "<label>, switch, on" instead of
+ * an unlabelled "switch, on", and the whole 56 dp row is the touch target rather than the thumb.
+ */
 @Composable
 private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = RowHeight)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

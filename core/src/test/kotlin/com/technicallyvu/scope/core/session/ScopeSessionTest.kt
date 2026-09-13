@@ -591,6 +591,32 @@ class ScopeSessionTest {
     }
 
     @Test
+    fun `clearing an override makes the next open of that driver fall back to the driver default`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val first = EndableTransport(stream(6, loop = true))
+        val devices = FakeDevices(listOf(ref)) { first }
+        val s = session(devices, sink)
+        s.setDefaultOverride("i4season-yuv", 90, true)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(90, s.state.value.rotation, "override rotation should apply at session start")
+        assertTrue(s.state.value.mirror)
+
+        // Forget it while the same driver is still the last one opened: the map entry going away
+        // must not leave the session sticky on that driver, or the next open keeps 90/mirrored.
+        s.clearDefaultOverride("i4season-yuv")
+        assertEquals(90, s.state.value.rotation, "clearing an override must not change the live session")
+
+        devices.opener = { stream(6, loop = true) }
+        first.endNow = true
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(180, s.state.value.rotation, "a forgotten driver's next open must fall back to driver.defaultRotation")
+        assertFalse(s.state.value.mirror, "a forgotten driver's next open must fall back to an unmirrored view")
+        s.stop()
+    }
+
+    @Test
     fun `an override set while nothing is streaming does not touch the state`(): Unit = runBlocking {
         val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink())
         s.setDefaultOverride("i4season-yuv", 90, true)

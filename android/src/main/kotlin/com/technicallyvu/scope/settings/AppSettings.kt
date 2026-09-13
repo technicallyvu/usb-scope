@@ -1,12 +1,22 @@
 package com.technicallyvu.scope.settings
 
 import android.content.SharedPreferences
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** A per-driver rotation/mirror override, applied when that driver's session starts. */
+@Immutable
 data class DriverDefault(val rotation: Int, val mirror: Boolean)
 
+/**
+ * [Immutable] because [defaults] is a `kotlin.collections.Map`, which the Compose compiler infers
+ * as unstable — which would make the whole class unstable and `SettingsScreen` non-skippable, so
+ * the settings subtree would recompose with `ScopeScreen` at the stream's frame rate. Every field
+ * here is a val holding an immutable value and the map is only ever replaced, never mutated, so
+ * the promise holds.
+ */
+@Immutable
 data class Settings(
     val denoise: Boolean = true,
     val denoiseStrength: Float = 0.6f,
@@ -30,8 +40,16 @@ class AppSettings(private val prefs: SharedPreferences) {
     private val _flow = MutableStateFlow(load())
     val flow: StateFlow<Settings> = _flow
 
-    /** Applies [transform] to the current settings, clamps the result, publishes it, and persists it. */
-    fun update(transform: (Settings) -> Settings) {
+    /**
+     * Applies [transform] to the current settings, clamps the result, publishes it, and persists it.
+     *
+     * `synchronized` because the read-modify-write must not interleave: every caller today is on
+     * Main, but the class is otherwise thread-agnostic (the session worker already reads [flow]),
+     * and an update lost here is a preference the user set and never got back. It also keeps
+     * [persist] calls in the same order as the values they publish. [transform] is a tiny pure
+     * `copy()` at every call site, so holding the lock across it costs nothing.
+     */
+    fun update(transform: (Settings) -> Settings) = synchronized(this) {
         val next = clamp(transform(_flow.value))
         _flow.value = next
         persist(next)

@@ -91,9 +91,11 @@ class ScopeSession(
 
     @Volatile private var job: Job? = null
     @Volatile private var denoiser: TemporalDenoiser? = TemporalDenoiser()
+    // Written from the session coroutine on every open, and cleared from any thread by
+    // clearDefaultOverride (a settings screen), hence volatile.
+    @Volatile private var lastDriverId: String? = null
     // The following are only ever read/written from the session coroutine (started in `start()`,
     // confined to `workDispatcher`), so they need no synchronization of their own.
-    private var lastDriverId: String? = null
     private var prevButton = false
     private var lastButtonNanos: Long? = null
     /**
@@ -208,9 +210,16 @@ class ScopeSession(
      * Forgets [driverId]'s override, so its next open falls back to [DeviceDriver.defaultRotation].
      * Deliberately leaves the live session alone: nothing about the current view is "wrong" just
      * because the stored default was dropped.
+     *
+     * Dropping the map entry is not enough on its own: if [driverId] is the driver this session
+     * last opened, the next open would take the "same driver, no override" branch and keep whatever
+     * rotation state happens to hold, so "Forget" would visibly forget nothing. Clearing
+     * [lastDriverId] too makes that open look like a driver change, which is the fallback the KDoc
+     * above promises.
      */
     fun clearDefaultOverride(driverId: String) {
         defaultOverrides.remove(driverId)
+        if (lastDriverId == driverId) lastDriverId = null
     }
 
     /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */

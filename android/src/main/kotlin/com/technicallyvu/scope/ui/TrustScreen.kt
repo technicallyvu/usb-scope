@@ -10,19 +10,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,11 +48,17 @@ import com.technicallyvu.scope.core.TrustInfo
  * and who the reverse-engineered protocol work is credited to. Read-only; a [LazyColumn] since the
  * license text alone is long enough to need scrolling on a phone.
  *
+ * Structured like [SettingsScreen] — [Scaffold] + [TopAppBar], `safeDrawing` insets — and for one
+ * load-bearing reason beyond consistency: a bare `Column` paints no background and sets no content
+ * colour, so in dark mode this screen drew near-black default text onto the black window and was
+ * simply invisible. The Scaffold supplies `colorScheme.background` and the matching `onBackground`,
+ * so every `Text` below inherits a colour that contrasts in both themes.
+ *
  * @param devControls debug builds only (the caller passes null otherwise): long-pressing the
  * version line then opens the developer sheet. In a release build the long-press does not exist —
  * the modifier is not applied and [DevSheet] is never called.
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
     BackHandler(enabled = true, onBack = onBack)
@@ -61,19 +73,33 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
     }
     var showDevSheet by remember { mutableStateOf(false) }
 
-    // enableEdgeToEdge() (and targetSdk 36, which enforces it regardless) draws this screen behind
-    // the status and gesture bars; without this the title sits under the clock and the last line of
-    // the licence under the gesture bar.
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-        Surface(tonalElevation = 2.dp) {
-            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                Text(stringResource(R.string.about_title), style = MaterialTheme.typography.titleLarge)
-                OutlinedButton(onClick = onBack, modifier = Modifier.padding(top = 8.dp)) {
-                    Text(stringResource(R.string.action_back))
-                }
-            }
-        }
-        LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Scaffold(
+        // enableEdgeToEdge() (and targetSdk 36, which enforces it regardless) draws this screen
+        // behind the status and gesture bars, and the theme opts into the display cutout, so
+        // safeDrawing rather than the Scaffold's systemBars default: the bar keeps clear of the
+        // clock and a notch, and the insets below keep the last line of the licence clear of the
+        // gesture bar.
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.about_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+                windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
+            )
+        },
+    ) { innerPadding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             item {
                 // The developer sheet's only door, and only in a debug build: a long-press here.
                 // Nothing advertises it, and a release build attaches no gesture at all.
@@ -122,6 +148,9 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                 Text(
                     sourceUrl,
                     style = MaterialTheme.typography.bodyMedium,
+                    // The two tappable lines on this screen carry the theme's primary colour, so
+                    // "this opens a browser" is visible without relying on the tap to discover it.
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clickable { openLink(context, sourceUrl) },
                 )
             }
@@ -133,11 +162,13 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                     Text(
                         a.name,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clickable { openLink(context, a.url) },
                     )
                     Text(
                         stringResource(R.string.about_attribution_detail_format, a.license, a.note),
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
