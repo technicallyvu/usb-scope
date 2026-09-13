@@ -15,6 +15,13 @@ class TrustInfoTest {
     }
 
     @Test
+    fun `source and donate urls are https and distinct`() {
+        assertTrue(TrustInfo.sourceUrl.startsWith("https://"), "source url not https: ${TrustInfo.sourceUrl}")
+        assertTrue(TrustInfo.donateUrl.startsWith("https://"), "donate url not https: ${TrustInfo.donateUrl}")
+        assertTrue(TrustInfo.donateUrl != TrustInfo.sourceUrl, "donate url is still the source url")
+    }
+
+    @Test
     fun `license text is the full MIT license with attribution`() {
         assertTrue(TrustInfo.licenseText.contains("MIT License"))
         assertTrue(TrustInfo.licenseText.contains("Anthony Vu"))

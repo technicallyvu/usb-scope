@@ -47,6 +47,19 @@ object TrustInfo {
         ),
     )
 
+    /**
+     * Where the source lives. Placeholder until the repository has a public home; Android renders
+     * the same URL from the `source_url` string resource.
+     */
+    val sourceUrl: String = "https://technicallyvu.com/usb-scope"
+
+    /**
+     * "Support this project" on both About surfaces. Placeholder — Anthony will point this at the
+     * real donation page (Ko-fi / GitHub Sponsors) before release; the Android copy of it is the
+     * `donate_url` string resource. Opening it is a browser intent, so it costs no permission.
+     */
+    val donateUrl: String = "https://technicallyvu.com/usb-scope/support"
+
     val protocolNote: String =
         "The single-interface YUV protocol was recovered by observing the device and reading the " +
             "publicly distributed vendor app; no vendor code is included."
