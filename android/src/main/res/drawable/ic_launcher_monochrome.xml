@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon (Android 13+) layer: the same line art as ic_launcher_foreground.xml reduced to a
+     single-colour silhouette. Black is the convention - the system re-tints it from the wallpaper
+     palette, so only the alpha of these paths matters. The glow, the lens ring and the highlight
+     are dropped: at themed-icon contrast they would only muddy the shape. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Phone outline, interrupted at the plug and at the cable exit. -->
+    <path
+        android:pathData="M37.3,78 L32,78 C29.79,78 28,76.21 28,74 L28,33 C28,30.79 29.79,29 32,29 L54,29 C56.21,29 58,30.79 58,33 L58,41.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M58,56 L58,74 C58,76.21 56.21,78 54,78 L52.7,78"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Cable. -->
+    <path
+        android:pathData="M45,69 C45,62 42,56 45.5,52 C49,48 53.5,47.2 58.5,48.6 C62,53.5 63.5,57 67,55.5 C69.5,54.4 68.1,49.43 69.6,46.6"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- USB-C plug body and tab. -->
+    <path
+        android:pathData="M42.3,69 L47.7,69 C48.69,69 49.5,69.81 49.5,70.8 L49.5,78.2 C49.5,79.19 48.69,80 47.7,80 L42.3,80 C41.31,80 40.5,79.19 40.5,78.2 L40.5,70.8 C40.5,69.81 41.31,69 42.3,69 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M43.7,80.8 L46.3,80.8 C46.96,80.8 47.5,81.34 47.5,82 L47.5,83.4 C47.5,84.06 46.96,84.6 46.3,84.6 L43.7,84.6 C43.04,84.6 42.5,84.06 42.5,83.4 L42.5,82 C42.5,81.34 43.04,80.8 43.7,80.8 Z"
+        android:fillColor="#FF000000" />
+
+    <!-- Probe tip and lens. -->
+    <path
+        android:pathData="M68.28,45.9 L70.92,47.3 L77.75,38.47 L71.75,35.29 Z"
+        android:fillColor="#FF000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M70.2,35.1 A5.5,5.5 0 1,0 81.2,35.1 A5.5,5.5 0 1,0 70.2,35.1 Z"
+        android:fillColor="#FF000000" />
+</vector>

@@ -6,8 +6,9 @@ look at denoise/About, and the whole of Phase 3b — none of which has run on a 
 next time the Fold 7 is on USB.
 
 ## Look and feel (polish)
-1. ~~Material 3 theme with dynamic colour and dark mode~~ — done in 3b. Still open: the **real app icon**
-   (the shipped adaptive icon is a placeholder; Anthony's call) and a splash screen.
+1. ~~Material 3 theme with dynamic colour and dark mode~~ — done in 3b. ~~Real app icon~~ — done: an
+   all-vector adaptive icon (phone + USB-C cable + lit probe on a mint-to-sky gradient), with a
+   monochrome layer for Android 13 themed icons. Still open: a splash screen.
 2. ~~Full-screen live view with controls as a translucent sheet that auto-hides; tap to reveal; wide/Fold-open
    rail; 56 dp touch targets.~~ Done in 3b — the wide rail has not been seen on a real fold.
 3. ~~Status as icons: connection dot, fps chip, REC timer, "Saved" toast with thumbnail.~~ Done in 3b.
@@ -52,13 +53,15 @@ next time the Fold 7 is on USB.
 Phase 3a's list (UVC on any webcam, denoise tuning, denoise cost against the 25 ms/frame threshold, the trust
 screen) plus the whole of Phase 3b on the Fold 7: live-view chrome and auto-hide, the controls sheet at real
 density, settings persistence across a restart, per-device orientation memory across a replug, the tips card,
-dark mode against a real picture, and the placeholder icon on the launcher.
+dark mode against a real picture, and the launcher icon on a real launcher (only the emulator's circle mask has
+been seen; the Fold 7 uses a different mask, and Android 13 themed icons are still unverified).
 
 ## Launch prep (Anthony)
 Name + USPTO check ("USB Scope" is a placeholder and appears in the media folder name, so changing it after
 release orphans saved media), D-U-N-S, Play developer account, privacy policy page, GitHub repository (then
 replace source_url, push tags v0.1.0-bench, v0.2.0-android, v0.3.0-features, v0.3.1-polish), one-hour legal
-review, the final launcher icon.
+review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` from
+`art/icon-play-512.svg`, so swap it only if the artwork changes.
 
 ## Launch prep (Claude)
 Release signing, minify rules, store listing text and screenshots, F-Droid metadata, About screen links, help text.
