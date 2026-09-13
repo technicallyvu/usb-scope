@@ -28,6 +28,12 @@ Checked 2026-09-09 against OSV (https://api.osv.dev/v1/query, ecosystem Maven). 
 | androidx.exifinterface:exifinterface | 1.4.2 |
 | org.jetbrains.kotlinx:kotlinx-coroutines-android | 1.11.0 |
 
+Checked 2026-09-12 against OSV (https://api.osv.dev/v1/query, ecosystem Maven). Zero known vulns.
+
+| Artifact | Version |
+|---|---|
+| androidx.compose.material:material-icons-core | 1.7.8 (via BOM 2026.08.00) |
+
 Android SDK levels: compileSdk 37, required by the pinned AndroidX artifacts (Compose BOM 2026.08.00); targetSdk 36, minSdk 29.
 
 Re-run before every release:

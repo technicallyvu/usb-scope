@@ -11,12 +11,13 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import com.technicallyvu.scope.ui.ScopeScreen
 import com.technicallyvu.scope.ui.ScopeViewModel
+import com.technicallyvu.scope.ui.theme.ScopeTheme
 
 class MainActivity : ComponentActivity() {
     private val vm: ScopeViewModel by viewModels()
@@ -35,6 +36,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -42,7 +44,7 @@ class MainActivity : ComponentActivity() {
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent {
-            MaterialTheme {
+            ScopeTheme {
                 ScopeScreen(vm, onRequestPermission = ::requestUsbPermission)
             }
         }
