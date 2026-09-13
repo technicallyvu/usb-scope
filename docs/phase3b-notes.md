@@ -223,3 +223,5 @@ Tests: 44 Android unit tests green (`AppSettingsTest` 5, `SettingsWiringTest` 6,
   layout wants a rethink.
 </content>
 </invoke>
+
+- **The icon — decided 2026-09-13.** See `art/tools/make_icon.py`; source `art/icon-source.png`.

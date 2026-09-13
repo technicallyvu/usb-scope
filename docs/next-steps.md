@@ -6,9 +6,9 @@ look at denoise/About, and the whole of Phase 3b — none of which has run on a 
 next time the Fold 7 is on USB.
 
 ## Look and feel (polish)
-1. ~~Material 3 theme with dynamic colour and dark mode~~ — done in 3b. ~~Real app icon~~ — done: an
-   all-vector adaptive icon (phone + USB-C cable + lit probe on a mint-to-sky gradient), with a
-   monochrome layer for Android 13 themed icons. Still open: a splash screen.
+1. ~~Material 3 theme with dynamic colour and dark mode~~ — done in 3b. ~~Real app icon~~ — done 2026-09-13: Anthony's design (phone + USB-C cable + lit probe on a
+   teal-to-blue gradient), lifted from his render by `art/tools/make_icon.py` into bitmap foreground and
+   monochrome layers over a vector gradient background. Still open: a splash screen.
 2. ~~Full-screen live view with controls as a translucent sheet that auto-hides; tap to reveal; wide/Fold-open
    rail; 56 dp touch targets.~~ Done in 3b — the wide rail has not been seen on a real fold.
 3. ~~Status as icons: connection dot, fps chip, REC timer, "Saved" toast with thumbnail.~~ Done in 3b.
