@@ -5,9 +5,13 @@ import android.graphics.Bitmap
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.technicallyvu.scope.BuildConfig
+import com.technicallyvu.scope.R
 import com.technicallyvu.scope.core.driver.DriverRegistry
 import com.technicallyvu.scope.core.driver.Frame
 import com.technicallyvu.scope.core.driver.FrameData
@@ -25,41 +29,134 @@ import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.media.FrameBitmaps
 import com.technicallyvu.scope.media.MediaStoreSaver
 import com.technicallyvu.scope.media.SurfaceRecorder
+import com.technicallyvu.scope.settings.AppSettings
+import com.technicallyvu.scope.settings.DriverDefault
+import com.technicallyvu.scope.settings.SessionSettingsTarget
+import com.technicallyvu.scope.settings.Settings
+import com.technicallyvu.scope.settings.SettingsApplier
 import com.technicallyvu.scope.usb.AndroidDeviceSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
+
+/** Which full-screen destination is showing. */
+enum class Screen { Live, Settings, Trust }
+
+/**
+ * Where a cable-button event (a snapshot, or a double-press record toggle) leaves the user.
+ *
+ * Always the live view, whatever was showing. The button keeps working behind Settings and About —
+ * the session never stops — and every sign that a press happened lives on [Screen.Live]: the REC
+ * badge, the shutter flash, the "Saved" toast and the snackbar host. Without this rule a
+ * double-press from Settings starts writing a clip with nothing on screen saying so, which is the
+ * exact hazard the `enabled = !recording` guards on the Settings and About buttons exist to
+ * prevent.
+ *
+ * A pure function of the current destination rather than an `if` buried in the view model, so the
+ * rule itself is pinned by a plain JVM test.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun screenAfterButtonEvent(current: Screen): Screen = Screen.Live
 
 data class UiState(
     val session: SessionState = SessionState(),
     val image: Bitmap? = null,
     val showStats: Boolean = false,
-    val showTrust: Boolean = false,
+    val screen: Screen = Screen.Live,
+    /**
+     * Where [Screen.Trust]'s back arrow (and back gesture) returns to. [Screen] is a flat enum with
+     * no back stack, and one screen pair needs one: About opened from Settings must go back to
+     * Settings, not drop the user onto the live view. Set by [ScopeViewModel.navigate].
+     */
+    val returnTo: Screen = Screen.Live,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
+    /** Bumped with every [message], so the screen can tell two identical consecutive messages
+     * apart; keying a `LaunchedEffect` on the text alone silently swallows the second one. */
+    val messageTick: Long = 0L,
     val replaying: Boolean = false,
     /** Bumped on every cable-button event (snapshot or double-press toggle) so the screen can fire
      * a haptic tick via a `LaunchedEffect(ui.hapticTick)`; the initial value must not itself buzz. */
     val hapticTick: Long = 0L,
+    /** A recording start is in flight (MediaStore + encoder setup); the Record button shows a
+     * spinner and refuses further taps until it clears, either way. */
+    val recordingStarting: Boolean = false,
+    /** [System.nanoTime] of the moment the recorder was published, or null when not recording. */
+    val recordingStartedAtNanos: Long? = null,
+    /** A small thumbnail of the last saved photo, held for three seconds so the screen can confirm
+     * the save, then cleared. */
+    val lastSnapshotThumb: Bitmap? = null,
+    /** Bumped the instant a snapshot is taken so the screen can blink a shutter flash; as with
+     * [hapticTick], the initial value must not itself flash. */
+    val flashTick: Long = 0L,
 )
 
-class ScopeViewModel(app: Application) : AndroidViewModel(app) {
+class ScopeViewModel(app: Application, private val appSettings: AppSettings) : AndroidViewModel(app) {
     private val usbManager = app.getSystemService(UsbManager::class.java)
     private val usbDevices = AndroidDeviceSource(usbManager)
-    private val saver = MediaStoreSaver(app.contentResolver)
+    private val saver = MediaStoreSaver(app)
 
-    private val _ui = MutableStateFlow(UiState())
+    // The stats overlay is a persisted preference; the initial UI state has to agree with the store
+    // before the settings collector below has run even once.
+    private val _ui = MutableStateFlow(UiState(showStats = appSettings.flow.value.showStats))
     val ui: StateFlow<UiState> = _ui
 
+    /** The persisted preferences, for the settings screen to render and edit. */
+    val settings: StateFlow<Settings> = appSettings.flow
+
+    /**
+     * Whether the activity should hold the screen awake: the preference AND an actual stream.
+     * Nothing to watch means nothing to keep the screen on for, however the preference reads.
+     */
+    val keepScreenOn: StateFlow<Boolean> =
+        combine(
+            appSettings.flow,
+            // Not _ui itself: it carries a new Bitmap on every frame, so combining it ran this
+            // transform ~30×/s on Main for the view model's whole life. `stateIn` conflated the
+            // result, so nothing downstream churned, but the work was still being done. One
+            // boolean, de-duplicated, leaves the combine idle unless the stream actually starts or
+            // stops.
+            _ui.map { it.session.connection is ConnectionState.Streaming }.distinctUntilChanged(),
+        ) { s, streaming -> s.keepScreenOn && streaming }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Whether the per-second frame-timing log is being written; debug builds only, on by default. */
+    private val _logFrameTiming = MutableStateFlow(true)
+
+    /**
+     * What the developer sheet renders. Derived from [_ui], which changes on every frame, but a
+     * `StateFlow` drops equal values, so the sheet only recomposes when one of these two actually
+     * flips. `WhileSubscribed` rather than `Eagerly`: nothing should be combining state per frame
+     * for a sheet that is closed, and in a release build never opens at all.
+     */
+    val devState: StateFlow<DevState> =
+        combine(_ui, _logFrameTiming) { u, t -> DevState(u.replaying, t) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(),
+                DevState(replaying = _ui.value.replaying, logFrameTiming = _logFrameTiming.value),
+            )
+
     @Volatile private lateinit var session: ScopeSession
+    /** Pushes settings into the current session; replaced with the session in [attach]. */
+    @Volatile private var applier: SettingsApplier? = null
+    /** The last denoise flag pushed to a session, to spot an off→on transition. */
+    private var lastAppliedDenoise: Boolean? = null
     private var stateJob: Job? = null
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: Bitmap? = null
@@ -77,9 +174,52 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionToken = 0L
     /** The sink of the current session, so main-thread actions can reach its per-stream state. */
     @Volatile private var currentSink: SessionSink? = null
+    /** Identifies the newest snapshot, so an older one's toast timer cannot clear its thumbnail. */
+    private val snapshotGeneration = AtomicLong(0L)
+
+    /** Publishes a formatted resource string as the transient snackbar message. */
+    private fun message(@StringRes id: Int, vararg args: Any) {
+        val text = getApplication<Application>().getString(id, *args)
+        _ui.update { it.copy(message = text, messageTick = it.messageTick + 1) }
+    }
 
     init {
         attach(usbDevices, replaying = false)
+        // One collector for the life of the view model: every settings change (from the settings
+        // screen, from a control that persists, or from a reset) is pushed into whichever session
+        // is current. Sessions created later pick the settings up in [attach] instead.
+        viewModelScope.launch {
+            appSettings.flow.collect { s ->
+                // Off → on: drop the sink's ARGB denoiser history, otherwise the first filtered
+                // frame blends with a picture from before denoise was switched back on.
+                if (s.denoise && lastAppliedDenoise == false) currentSink?.resetDenoisers()
+                lastAppliedDenoise = s.denoise
+                applier?.apply(s)
+                _ui.update { it.copy(showStats = s.showStats) }
+            }
+        }
+    }
+
+    /** Bumps the haptic tick, unless the user turned cable-button vibration off. */
+    private fun hapticTick() {
+        if (appSettings.flow.value.haptics) _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+    }
+
+    /**
+     * The common prelude to every cable-button event: bring the live view forward (see
+     * [screenAfterButtonEvent]) and buzz. Called from the session worker thread, which
+     * [MutableStateFlow] is safe for.
+     *
+     * The screen change also drops any pending [UiState.message]: the snackbar host only exists on
+     * the live view, so a message raised while the user was elsewhere would be replayed — stale —
+     * the moment they came back. This event's own message (if any) is published after it.
+     */
+    private fun onButtonEvent() {
+        _ui.update {
+            val next = screenAfterButtonEvent(it.screen)
+            if (next == it.screen) it else it.copy(screen = next, returnTo = Screen.Live, message = null)
+        }
+        hapticTick()
     }
 
     /**
@@ -109,7 +249,17 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                 recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
             }
             _ui.update { it.copy(image = shown) }
-            if (BuildConfig.DEBUG) logTiming(t0, state)
+            if (BuildConfig.DEBUG && _logFrameTiming.value) logTiming(t0, state)
+        }
+
+        /**
+         * Drops the current timing window. Called when the log is switched back on, so the first
+         * window after the gap does not report the whole off period as one enormous frame gap.
+         * Best effort: these counters belong to the worker thread and are only ever read there, so
+         * racing it costs at worst one skewed line in a debug log.
+         */
+        fun resetTiming() {
+            lastFrameNanos = 0L; windowStartNanos = 0L; windowFrames = 0; windowMaxGapMs = 0L; windowProcessNanos = 0L
         }
 
         private fun logTiming(t0: Long, state: SessionState) {
@@ -122,7 +272,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (now - windowStartNanos >= 1_000_000_000L) {
                 val secs = (now - windowStartNanos) / 1e9
                 Log.d(
-                    TAG,
+                    LOG_TAG,
                     String.format(
                         Locale.ROOT,
                         "timing: %.1f fps  maxGap %d ms  avgProcess %.1f ms  partial %d  dropped %d  driverFps %.1f",
@@ -136,13 +286,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onButtonSnapshot() {
             if (token != currentSessionToken) return
-            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            onButtonEvent()
             snapshot()
         }
 
         override fun onButtonRecordToggle() {
             if (token != currentSessionToken) return
-            _ui.update { it.copy(hapticTick = it.hapticTick + 1) }
+            onButtonEvent()
             viewModelScope.launch { toggleRecording(fromButton = true) }
         }
 
@@ -181,6 +331,12 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         currentSink = sink
         val newSession = ScopeSession(devices, DriverRegistry.all, viewModelScope, sink = sink)
         session = newSession
+        // Before start(): a fresh session carries none of the user's settings, and the per-driver
+        // rotation/mirror overrides have to be in place before the first device opens, or the first
+        // picture of this session comes up in the driver's own default orientation.
+        val newApplier = SettingsApplier(SessionSettingsTarget(newSession))
+        newApplier.apply(appSettings.flow.value)
+        applier = newApplier
         _ui.update { it.copy(replaying = replaying) }
         newSession.start()
         stateJob = viewModelScope.launch {
@@ -204,20 +360,49 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- actions (main thread) ----
-    fun rotate() = session.rotate()
-    fun toggleMirror() = session.toggleMirror()
-    fun toggleStats() = _ui.update { it.copy(showStats = !it.showStats) }
-    fun toggleTrust() = _ui.update { it.copy(showTrust = !it.showTrust) }
+    fun rotate() { session.rotate(); rememberOrientation() }
+    fun toggleMirror() { session.toggleMirror(); rememberOrientation() }
+    fun toggleStats() = appSettings.update { it.copy(showStats = !it.showStats) }
     /**
-     * Re-enabling starts from a clean slate. [ScopeSession.setDenoise] builds a fresh YUV denoiser
-     * on its own; the shell's ARGB one (for decoded JPEG frames) lives in the sink and is reset
-     * here, otherwise the first filtered frame would blend with a picture from before the toggle.
+     * Switches destination, remembering where [Screen.Trust] was entered from so its back arrow can
+     * return there (see [UiState.returnTo]), and dropping any pending [UiState.message]: the
+     * snackbar host lives on the live view only, so a message the user has navigated away from
+     * would otherwise be shown on their return, long after the event it describes.
      */
-    fun toggleDenoise() {
-        val enabled = !session.state.value.denoise
-        if (enabled) currentSink?.resetDenoisers()
-        session.setDenoise(enabled)
+    fun navigate(screen: Screen) = _ui.update {
+        it.copy(
+            screen = screen,
+            returnTo = if (screen == Screen.Trust) it.screen else Screen.Live,
+            message = null,
+        )
     }
+
+    /** Replaces the whole settings object (the settings screen edits a copy and hands it back). */
+    fun updateSettings(next: Settings) = appSettings.update { next }
+
+    /** The first-launch tips card was dismissed; Settings can bring it back. */
+    fun dismissTips() = appSettings.update { it.copy(tipsDismissed = true) }
+
+    /**
+     * Records the orientation the user just chose as this device's default, so the next time the
+     * same endoscope is plugged in its picture comes up the right way round. Reads the session's
+     * state rather than the requested change: [ScopeSession.rotate] and
+     * [ScopeSession.toggleMirror] are no-ops while recording, and a refused change must not be
+     * remembered. Nothing is written while no device is streaming (no driver id to file it under)
+     * or when the value is already the stored one.
+     */
+    private fun rememberOrientation() {
+        val s = session.state.value
+        val driverId = s.driverId ?: return
+        val next = DriverDefault(s.rotation, s.mirror)
+        if (appSettings.flow.value.defaults[driverId] == next) return
+        appSettings.update { it.copy(defaults = it.defaults + (driverId to next)) }
+    }
+    /**
+     * Denoise is a persisted preference, so the toggle writes the store and the settings collector
+     * applies it to the session (and resets the sink's ARGB denoiser on an off→on transition).
+     */
+    fun toggleDenoise() = appSettings.update { it.copy(denoise = !it.denoise) }
 
     fun snapshot() {
         // lastFrame and lastImage are both published from onFrame but may reflect adjacent frames
@@ -227,6 +412,13 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         val shown = lastImage ?: return
         val s = session.state.value
         val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".jpg"
+        // The blink fires now, not when the file lands: the shutter has to answer the tap, and the
+        // save takes as long as MediaStore takes.
+        _ui.update { it.copy(flashTick = it.flashTick + 1) }
+        // Identifies this snapshot's thumbnail, so a later one's three-second timer cannot clear a
+        // newer thumbnail than the one it was started for. Atomic: cable-button snapshots arrive on
+        // the session's worker thread, on-screen ones on Main.
+        val thumbGeneration = snapshotGeneration.incrementAndGet()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 when {
@@ -242,9 +434,35 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // published, so compressing here while the worker moves on is safe.
                     else -> saver.saveBitmapJpeg(shown, name)
                 }
-            }.onSuccess { session.markSaved(name) }
-             .onFailure { e -> _ui.update { it.copy(message = "Snapshot failed: ${e.message}") } }
+            }.onSuccess {
+                session.markSaved(name)
+                // Scaling touches the bitmap's pixels; do it here on IO, not on Main. `shown` was
+                // published to the UI and is never written again, so reading it is safe.
+                val thumb = runCatching { thumbnailOf(shown) }.getOrNull()
+                if (thumb != null) {
+                    _ui.update { it.copy(lastSnapshotThumb = thumb) }
+                    viewModelScope.launch {
+                        delay(SNAPSHOT_TOAST_MILLIS)
+                        // A newer snapshot owns the thumbnail now; leave it its full three seconds.
+                        if (snapshotGeneration.get() == thumbGeneration) _ui.update { it.copy(lastSnapshotThumb = null) }
+                    }
+                }
+            }.onFailure { e -> message(R.string.error_snapshot_failed_format, e.message.orEmpty()) }
         }
+    }
+
+    /**
+     * A copy of [src] scaled to fit inside [THUMB_MAX_PX] on its longer side, aspect preserved.
+     * Returns null for a degenerate bitmap rather than letting `createScaledBitmap` throw.
+     */
+    private fun thumbnailOf(src: Bitmap): Bitmap? {
+        val w = src.width
+        val h = src.height
+        if (w <= 0 || h <= 0) return null
+        val scale = minOf(1f, THUMB_MAX_PX.toFloat() / maxOf(w, h).toFloat())
+        val tw = maxOf(1, (w * scale).toInt())
+        val th = maxOf(1, (h * scale).toInt())
+        return Bitmap.createScaledBitmap(src, tw, th, true)
     }
 
     /**
@@ -272,14 +490,17 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
+        // The spinner goes up before the IO hop and comes down in the finally below, whichever way
+        // the start ends — published, refused or thrown.
+        _ui.update { it.copy(recordingStarting = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val img = lastImage ?: return@launch
                 val generation = synchronized(recorderLock) { recorderGeneration }
                 val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
-                val video = runCatching { saver.createVideo(name) }.getOrElse { e -> _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                val video = runCatching { saver.createVideo(name) }.getOrElse { e -> message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 val created = runCatching { SurfaceRecorder(getApplication(), video.fd, img.width, img.height) }
-                    .getOrElse { e -> saver.finishVideo(video, keep = false); _ui.update { it.copy(message = "Recording could not start: ${e.message}") }; return@launch }
+                    .getOrElse { e -> saver.finishVideo(video, keep = false); message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 synchronized(recorderLock) {
                     if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
                     recorder = created
@@ -288,11 +509,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
                     // can never observe recorder != null with recording still false and auto-stop
                     // the recording that was just started.
                     session.setRecording(true)
+                    // The REC badge counts from here: the moment the encoder actually took over.
+                    _ui.update { it.copy(recordingStartedAtNanos = System.nanoTime()) }
                 }
-                if (fromButton) _ui.update { it.copy(message = "Recording started") }
+                if (fromButton) message(R.string.status_recording_started)
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
             } finally {
                 recordingTransition = false
+                _ui.update { it.copy(recordingStarting = false) }
             }
         }
     }
@@ -315,7 +539,8 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
             if (kept) session.markSaved(video.displayName)
         }
         session.setRecording(false)
-        if (fromButton) _ui.update { it.copy(message = "Recording stopped") }
+        _ui.update { it.copy(recordingStartedAtNanos = null) }
+        if (fromButton) message(R.string.status_recording_stopped)
     }
 
     // ---- USB events from the activity ----
@@ -323,7 +548,14 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onPermissionResult(granted: Boolean) {
         usbDevices.pendingPermission = null
-        _ui.update { it.copy(permissionDevice = null, message = if (granted) null else "USB permission denied") }
+        val denied = if (granted) null else getApplication<Application>().getString(R.string.status_permission_denied)
+        _ui.update {
+            it.copy(
+                permissionDevice = null,
+                message = denied,
+                messageTick = if (denied == null) it.messageTick else it.messageTick + 1,
+            )
+        }
     }
 
     fun clearMessage() = _ui.update { it.copy(message = null) }
@@ -344,6 +576,53 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         switchSession { attach(usbDevices, replaying = false) }
     }
 
+    /** Start or stop the replay fixture, whichever the current state calls for (developer sheet). */
+    fun toggleReplay() {
+        if (_ui.value.replaying) stopReplay() else startReplay()
+    }
+
+    /** Switches the per-second frame-timing log on or off (developer sheet, debug builds only). */
+    fun setLogFrameTiming(on: Boolean) {
+        if (_logFrameTiming.value == on) return
+        _logFrameTiming.value = on
+        // Switching it back on starts a fresh window, so the gap while it was off is not reported
+        // as one enormous inter-frame delay.
+        if (on) currentSink?.resetTiming()
+    }
+
+    /**
+     * A short technical dump for a bug report: build, driver, connection and stream statistics.
+     * Sampled when asked for, not maintained; the developer sheet copies it to the clipboard.
+     * The driver's *display* name leads, with the raw id after it — this is the one place the id
+     * itself is worth showing, and the sheet only exists in debug builds.
+     */
+    fun diagnostics(): String {
+        val app = getApplication<Application>()
+        val u = _ui.value
+        val s = u.session
+        val driver = app.getString(
+            R.string.dev_diagnostics_driver_format,
+            app.getString(driverNameRes(s.driverId)),
+            s.driverId.orEmpty(),
+        )
+        val connection = when (val c = s.connection) {
+            is ConnectionState.NoDevice -> app.getString(R.string.status_no_device)
+            is ConnectionState.Connecting -> app.getString(R.string.status_connecting)
+            is ConnectionState.Streaming ->
+                if (u.replaying) app.getString(R.string.status_replaying) else app.getString(R.string.status_streaming)
+            is ConnectionState.Failed -> app.getString(R.string.status_error_prefix, c.message)
+        }
+        val stats = app.getString(
+            R.string.stats_overlay_format,
+            s.stats.fps, s.stats.framesEmitted, s.stats.framesPartial, s.stats.framesDropped, s.stats.bytesReceived / 1e6,
+        )
+        return app.getString(
+            R.string.dev_diagnostics_format,
+            app.getString(R.string.app_name), BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.GIT_SHA,
+            driver, connection, stats,
+        )
+    }
+
     /**
      * Tears the current session down off the main thread, then runs [start] (which calls [attach])
      * back on Main. Nothing here may block Main: the session join waits on an in-flight USB read.
@@ -353,7 +632,7 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val joined = withContext(Dispatchers.IO) { session.stopAndJoin() }
-                if (!joined) Log.w(TAG, "session did not stop in time")
+                if (!joined) Log.w(LOG_TAG, "session did not stop in time")
                 lastImage = null
                 lastFrame = null
                 start()
@@ -374,8 +653,22 @@ class ScopeViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
     }
 
+    /**
+     * Hands the view model its [AppSettings]. Plain and explicit rather than a DI framework or an
+     * `Application` subclass: there is exactly one dependency and one activity.
+     */
+    class Factory(private val app: Application, private val settings: AppSettings) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = ScopeViewModel(app, settings) as T
+    }
+
     companion object {
-        private const val TAG = "ScopeViewModel"
+        /** logcat tag for this view model, including the frame-timing log the developer sheet names. */
+        const val LOG_TAG = "ScopeViewModel"
+        /** Longest side of the snapshot thumbnail carried in [UiState.lastSnapshotThumb]. */
+        private const val THUMB_MAX_PX = 96
+        /** How long the "Saved" toast (and its thumbnail) stays up. */
+        private const val SNAPSHOT_TOAST_MILLIS = 3_000L
         val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.ROOT)
     }
 }

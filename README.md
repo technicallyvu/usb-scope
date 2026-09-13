@@ -30,21 +30,42 @@ jmz3/EndoscopeCamera, NinesLastGoal/supercamera_WIN10.
 
 ## Status
 Phase 1 (Windows dev bench) accepted 2026-09-09 against an i4season "su4p-002" (2CE3:3828, firmware 5.0.13).
-Next: Phase 3, launch prep (see docs/phase2-notes.md).
+Phases 2, 3a and 3b followed; next is launch prep (see `docs/next-steps.md`).
 
 ## Android (Phase 2)
     .\gradlew.bat :android:assembleDebug            # builds; fails if any dependency adds the INTERNET permission
     C:\platform-tools\adb.exe install -r android\build\outputs\apk\debug\android-debug.apk
 
 Plug the endoscope into the phone; Android offers to open USB Scope. Photos go to Pictures/USB Scope and clips to
-Movies/USB Scope through MediaStore, so the app requests no permissions at all. Debug builds add a "Replay fixture"
-control that streams the bundled capture without hardware, and log per-second frame timing under the tag
-`ScopeViewModel`. Requires the Android SDK (compileSdk 37, targetSdk 36, minSdk 29); see `docs/dependencies.md`.
+Movies/USB Scope through MediaStore, so the app requests no system permissions at all. (The trust screen reports
+"Permissions requested: 0". The merged manifest does contain one app-private signature permission injected by
+AndroidX for its own broadcast receivers — it is defined by the app, granted only to the app, invisible to every
+other app, and is not a system permission; the count excludes it and says so in a footnote.) Debug builds add a
+developer sheet — replay the bundled capture without hardware, log per-second frame timing under the tag
+`ScopeViewModel`, copy diagnostics — reached by a long-press on the version line in About. Requires the Android SDK
+(compileSdk 37, targetSdk 36, minSdk 29); see `docs/dependencies.md`.
 
-Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`.
+Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`, then `docs/phase3b-notes.md`.
 
-## Features (v0.3.0)
+### Screens
+- **Live view** — full screen, black letterbox. A status chip (connection dot, state, fps) top-left, a REC badge
+  with elapsed time top-right, and a translucent sheet of eight controls along the bottom: snapshot, record,
+  rotate, mirror, denoise, stats, settings, about. The sheet fades after four seconds without a touch while
+  streaming and comes back on a tap; the REC badge never fades. On a Fold-open or tablet window the sheet becomes
+  a rail down the side. A dismissable tips card explains the cable button and where files land on first launch.
+- **Settings** — denoise and its strength, the cable button's double-press window, haptics, keep screen on while
+  streaming, the stats overlay, the devices whose rotation and mirror the app has remembered (with "Forget"), and
+  "Show tips again". Everything persists across restarts.
+- **About & privacy** — the permission count, the source link, the MIT licence, attribution to the prior
+  reverse-engineering projects, version and build id.
+
+## Features (v0.3.1)
 - Temporal denoise (toggle in both apps): adaptive frame blending that removes sensor grain when the probe is
   still and passes moving detail through. Snapshots save what is on screen.
+- Cable button: one press takes a photo, two within the window (configurable, default 1.5 s) start or stop a clip.
+- Snapshot and recording feedback: shutter flash, a "Saved" toast with a thumbnail, a spinner while the encoder
+  starts, a REC timer.
+- Per-device orientation memory: rotate or mirror once and that device comes up that way next time.
+- Material 3 with dynamic colour on Android 12+, light and dark. The launcher icon is a placeholder.
 - About & privacy screen (Android) and About dialog (desktop): permissions the app does not have, source link,
   MIT license, attribution to the prior reverse-engineering projects, version and build id.

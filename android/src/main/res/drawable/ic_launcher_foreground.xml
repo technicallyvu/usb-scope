@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder adaptive icon foreground: a lens ring with a highlight, and a diagonal probe
+     cable entering the frame. Replace with real artwork before a public release; see
+     docs/phase3b-notes.md. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Lens ring, kept inside the ~66dp adaptive-icon safe zone. -->
+    <path
+        android:pathData="M24,54 A30,30 0 1,0 84,54 A30,30 0 1,0 24,54 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#F5F5F5"
+        android:strokeWidth="6" />
+
+    <!-- Small highlight, suggesting a glass lens catching light. -->
+    <path
+        android:pathData="M36,42 A7,7 0 1,0 50,42 A7,7 0 1,0 36,42 Z"
+        android:fillColor="#E6FFFFFF" />
+
+    <!-- Diagonal probe/cable running into the lens from the bottom-left corner. -->
+    <path
+        android:pathData="M14,94 L42,68"
+        android:strokeColor="#F5F5F5"
+        android:strokeWidth="9"
+        android:strokeLineCap="round" />
+</vector>

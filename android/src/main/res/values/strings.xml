@@ -2,4 +2,136 @@
     <string name="app_name">USB Scope</string>
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
     <string name="source_url">https://technicallyvu.com/usb-scope</string>
+
+    <!-- Placeholder launcher icon (see res/drawable/ic_launcher_foreground.xml and
+         res/values/ic_launcher_background.xml): a lens ring + probe line, dark teal background.
+         Replace with real artwork before a public release; tracked in docs/phase3b-notes.md. -->
+
+    <!-- ===== Status texts (StatusChip / status bar) ===== -->
+    <string name="status_no_device">No device</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_streaming">Streaming</string>
+    <string name="status_replaying">Replaying fixture</string>
+    <string name="status_error_prefix">Error: %1$s</string>
+    <string name="status_permission_denied">USB permission denied</string>
+    <string name="status_recording_started">Recording started</string>
+    <string name="status_recording_stopped">Recording stopped</string>
+    <string name="rec_badge_format">REC %1$s</string>
+    <!-- Status chip with the live frame rate appended (shown while streaming with stats on). -->
+    <string name="status_chip_fps_format">%1$s · %2$.1f fps</string>
+    <!-- Snapshot confirmation toast (thumbnail + this word + the file name). -->
+    <string name="snapshot_saved">Saved</string>
+
+    <!-- ===== Live-view prompts (shown in place of the image) ===== -->
+    <string name="live_view_no_device">Plug in your endoscope.</string>
+    <string name="live_view_connecting">Connecting…</string>
+    <string name="live_view_waiting_first_frame">Waiting for the first frame…</string>
+    <string name="live_view_permission_needed">USB permission needed.</string>
+    <string name="live_view_error_format">Could not start the device.\n%1$s\nRetrying automatically.</string>
+    <string name="stats_overlay_format">%1$.1f fps  frames %2$d  partial %3$d  dropped %4$d  %5$.1f MB</string>
+
+    <!-- ===== Errors surfaced as a snackbar message ===== -->
+    <string name="error_snapshot_failed_format">Snapshot failed: %1$s</string>
+    <string name="error_recording_start_failed_format">Recording could not start: %1$s</string>
+    <!-- MediaStore failures; they reach the user inside the two formats above. -->
+    <string name="error_media_create_failed">the file could not be created</string>
+    <string name="error_media_open_failed">the file could not be opened for writing</string>
+
+    <!-- ===== Media library ===== -->
+    <!-- The album under Pictures/ and Movies/. Not translated: a translated album name would
+         orphan everything already saved, and MediaStore paths are not user-facing text. -->
+    <string name="media_folder_name" translatable="false">USB Scope</string>
+
+    <!-- ===== Driver display names =====
+         Never show a driver id or `core`'s protocol label: both are engineering strings and one
+         carries a vendor-derived word. See ui/DriverNames.kt. -->
+    <string name="driver_name_yuv">USB-C scope (YUV)</string>
+    <string name="driver_name_mjpeg">USB scope (MJPEG)</string>
+    <string name="driver_name_uvc">UVC camera</string>
+    <string name="driver_name_unknown">USB scope</string>
+
+    <!-- ===== Button labels / content descriptions (controls sheet) ===== -->
+    <string name="action_allow_usb_access">Allow USB access</string>
+    <string name="action_back">Back</string>
+    <string name="action_close">Close</string>
+
+    <string name="cd_live_view">Live view</string>
+    <string name="cd_snapshot">Take snapshot</string>
+    <string name="cd_record">Start recording</string>
+    <string name="cd_stop">Stop recording</string>
+    <string name="cd_rotate">Rotate view</string>
+    <string name="cd_mirror">Mirror view</string>
+    <string name="cd_denoise">Toggle denoise</string>
+    <string name="cd_stats">Toggle stats overlay</string>
+    <string name="cd_settings">Open settings</string>
+    <string name="cd_about">About</string>
+    <string name="cd_snapshot_thumbnail">Last snapshot thumbnail</string>
+
+    <!-- ===== Tips card (first launch, no device connected yet) ===== -->
+    <string name="tips_title">Quick tips</string>
+    <string name="tips_line_plug_in">Plug the scope into the USB-C port. The app opens itself — tap Allow when Android asks.</string>
+    <string name="tips_line_hold_button">Hold the cable button about half a second — quick taps are ignored.</string>
+    <string name="tips_line_press_toggle">Press the cable button once for a snapshot, twice quickly to start or stop recording.</string>
+    <!-- %1$s is media_folder_name, so the promise and the album can never drift apart. -->
+    <string name="tips_line_gallery_location">Photos and clips land in your Gallery, in a folder called %1$s.</string>
+    <string name="tips_got_it">Got it</string>
+
+    <!-- ===== Settings screen ===== -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_group_image">Image</string>
+    <string name="settings_group_cable_button">Cable button</string>
+    <string name="settings_group_feedback">Feedback</string>
+    <string name="settings_group_devices">Devices</string>
+    <string name="settings_group_about">About</string>
+    <string name="settings_denoise_label">Reduce noise</string>
+    <string name="settings_denoise_strength_label">Noise reduction strength</string>
+    <string name="settings_double_press_window_label">Double-press window</string>
+    <string name="settings_double_press_window_help">Press the cable button once for a photo. Press it twice within this time to start or stop a clip.</string>
+    <string name="settings_haptics_label">Vibrate on cable button</string>
+    <string name="settings_keep_screen_on_label">Keep screen on while streaming</string>
+    <string name="settings_show_stats_label">Show stream statistics</string>
+    <string name="settings_show_tips_again">Show tips again</string>
+    <!-- Per-device orientation memory: written when the picture is rotated or mirrored in the live view. -->
+    <string name="settings_devices_empty">No devices remembered yet. Rotating or mirroring the picture saves that orientation for the device you are using.</string>
+    <string name="settings_device_rotation_format">Rotation %1$d°</string>
+    <string name="settings_device_rotation_mirrored_format">Rotation %1$d°, mirrored</string>
+    <string name="settings_forget">Forget</string>
+    <string name="settings_reset_all">Reset all settings</string>
+    <string name="settings_reset_title">Reset all settings?</string>
+    <string name="settings_reset_body">Every preference goes back to its default and all remembered devices are forgotten.</string>
+    <string name="settings_about_row">About this app</string>
+    <!-- Slider value labels: a percentage (60 %) and a duration in seconds (1.5 s). -->
+    <string name="settings_percent_format">%1$d %%</string>
+    <string name="settings_seconds_format">%1$.1f s</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="cd_forget_device_format">Forget the saved orientation for %1$s</string>
+
+    <!-- ===== Developer sheet (debug builds only, reached via long-press on About's version line) ===== -->
+    <string name="dev_sheet_title">Developer options</string>
+    <string name="dev_replay_start">Start replay fixture</string>
+    <string name="dev_replay_stop">Stop replay fixture</string>
+    <string name="dev_log_frame_timing_label">Log frame timing</string>
+    <!-- %1$s is the logcat tag the per-second timing summary is written under. -->
+    <string name="dev_log_frame_timing_help_format">A per-second summary of frame gaps and processing cost goes to logcat under the tag %1$s.</string>
+    <string name="dev_copy_diagnostics">Copy diagnostics</string>
+    <string name="dev_diagnostics_copied">Copied</string>
+    <string name="dev_diagnostics_clip_label">Scope diagnostics</string>
+    <!-- Technical dump for a bug report; debug builds only, so not translated. -->
+    <string name="dev_diagnostics_driver_format" translatable="false">%1$s [%2$s]</string>
+    <string name="dev_diagnostics_format" translatable="false">%1$s %2$s (%3$d) build %4$s\ndriver: %5$s\nconnection: %6$s\nstats: %7$s</string>
+    <string name="cd_open_developer_options">Open developer options</string>
+
+    <!-- ===== About / privacy screen (TrustScreen) ===== -->
+    <string name="about_title">About &amp; privacy</string>
+    <string name="about_version_format">Version %1$s (%2$s), build %3$s</string>
+    <string name="about_permissions_requested_format">Permissions requested: %1$d</string>
+    <!-- Shown only when the merged manifest carried an app-private signature permission (AndroidX
+         injects one for its internal broadcast receiver) that the count above deliberately skips. -->
+    <string name="about_permissions_internal_footnote">App-internal signature permissions (not visible to other apps) are not counted.</string>
+    <string name="about_permissions_not_requested_title">This app does not have:</string>
+    <string name="about_bullet_format">• %1$s</string>
+    <string name="about_attributions_title">Attributions</string>
+    <string name="about_attribution_detail_format">%1$s — %2$s</string>
+    <string name="about_license_title">License</string>
 </resources>

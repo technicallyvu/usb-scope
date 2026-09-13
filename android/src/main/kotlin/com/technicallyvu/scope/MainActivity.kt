@@ -11,15 +11,24 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
+import com.technicallyvu.scope.settings.AppSettings
 import com.technicallyvu.scope.ui.ScopeScreen
 import com.technicallyvu.scope.ui.ScopeViewModel
+import com.technicallyvu.scope.ui.theme.ScopeTheme
 
 class MainActivity : ComponentActivity() {
-    private val vm: ScopeViewModel by viewModels()
+    // The one settings store: created here, owned by the view model (which outlives a rotation, and
+    // keeps the instance it was given).
+    private val vm: ScopeViewModel by viewModels {
+        ScopeViewModel.Factory(application, AppSettings(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)))
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -35,14 +44,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        enableEdgeToEdge()
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             addAction(ACTION_USB_PERMISSION)
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent {
-            MaterialTheme {
+            ScopeTheme {
+                // The flag follows the "keep screen on while streaming" preference: the view model
+                // combines it with the connection state, so this only recomposes when the answer
+                // actually flips, not on every frame.
+                val keepScreenOn by vm.keepScreenOn.collectAsState()
+                LaunchedEffect(keepScreenOn) {
+                    if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
                 ScopeScreen(vm, onRequestPermission = ::requestUsbPermission)
             }
         }
@@ -63,5 +80,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_USB_PERMISSION = "com.technicallyvu.scope.USB_PERMISSION"
+        /** SharedPreferences file backing [AppSettings]. */
+        const val PREFS_NAME = "scope_settings"
     }
 }

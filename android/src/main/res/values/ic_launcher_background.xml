@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Placeholder app icon background/foreground (see ic_launcher_foreground.xml) — replace
+         before a public release; tracked in docs/phase3b-notes.md. -->
+    <color name="ic_launcher_background">#0F3D42</color>
+</resources>

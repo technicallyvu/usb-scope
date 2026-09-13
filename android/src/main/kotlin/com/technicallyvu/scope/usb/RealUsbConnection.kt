@@ -20,7 +20,7 @@ import kotlin.concurrent.withLock
  * Bulk IN reads are **pipelined**, not synchronous. [UsbDeviceConnection.bulkTransfer] submits one
  * URB per call and returns when it completes, so between one transfer completing and the next being
  * submitted (a JNI round trip plus our per-read coroutine dispatch) nothing at all is queued on the
- * endpoint. The i4season endoscope has a small FIFO and simply drops rows while the host is not
+ * endpoint. The single-interface YUV endoscope has a small FIFO and simply drops rows while the host is not
  * asking: measured on a Galaxy Z Fold 7 (Android 16), *every* frame arrived truncated
  * (`framesPartial` climbing ~11/s at 10.9 fps), while the desktop libusb backend — same driver, same
  * 16 KB reads, but asynchronous transfers — lost about one frame in six. The vendor app uses queued
@@ -31,7 +31,7 @@ import kotlin.concurrent.withLock
  * completion via [UsbDeviceConnection.requestWait], copies the bytes out and immediately re-queues
  * that request, so the endpoint always has requests outstanding and the device never stalls on us.
  *
- * OUT endpoints keep the plain synchronous path: they only carry the useeplus driver's short
+ * OUT endpoints keep the plain synchronous path: they only carry the MJPEG driver's short
  * commands, where latency does not matter and queueing would only add complexity.
  *
  * Callers must not close() concurrently with a bulkTransfer; the core frame sources guarantee this

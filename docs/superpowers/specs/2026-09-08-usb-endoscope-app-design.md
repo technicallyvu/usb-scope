@@ -288,3 +288,43 @@ Confirmed by Anthony 2026-09-10 (prompt-first). Three features on top of the acc
   `source_url`, placeholder until the GitHub repository exists), license, attributions.
 - Desktop: an About dialog with the same content (version, no-network statement, license, attributions).
 - Satisfies the §6 in-app attribution requirement.
+
+## 14. Amendment 2026-09-12: Phase 3b polish (Android)
+
+Requested by Anthony 2026-09-12 ("polish as much as we can; anything that doesn't need my input"). Scope is the
+Android app; the desktop bench is unchanged this phase. The final launcher icon and the product name remain
+Anthony's decisions; this phase ships a clearly-labelled placeholder icon.
+
+- **Theme.** Material 3 with dynamic colour on Android 12+ (fallback palette otherwise), light and dark.
+  Edge-to-edge with a black live-view surface. A placeholder adaptive icon (vector glyph on a solid background).
+- **Full-screen live view.** The picture fills the screen (fit, black letterbox). Status is a small chip
+  (connection dot, state text, fps when streaming) at the top; recording shows a REC badge with elapsed time.
+  Controls live in a translucent bottom sheet of icon buttons that hides after 4 s without interaction while
+  streaming and returns on tap; on wide (Fold-open) layouts the sheet becomes a side rail.
+- **Feedback.** Snapshot: a brief shutter flash and a "Saved" toast with a thumbnail. Recording: a
+  "Starting…" state on the Record control until the encoder is up. Messages via a snackbar host.
+- **Settings screen.** Persisted with SharedPreferences (no new dependency): denoise on/off and strength,
+  double-press window (1.0–2.5 s), default rotation and mirror per driver, haptics, keep screen on while
+  streaming, show stats overlay, "show tips again". Core `ScopeSession` accepts these (denoise strength,
+  double-press window, per-driver default rotation/mirror overrides).
+- **First-launch tips.** A dismissable card on the "no device" screen: plug in, allow access, the ~0.5 s
+  button press rule, single vs double press, where photos and clips go.
+- **Developer controls** (debug builds only) move behind a long-press on the version line in About: replay
+  fixture, timing log.
+- **Strings and accessibility.** All UI strings in `res/values/strings.xml`; content descriptions on icon
+  buttons; touch targets ≥ 48 dp.
+- **Verification.** Unit tests for the core settings plumbing; the app is exercised in replay mode on an
+  Android emulator (API 36) with screenshots of each screen recorded in `.superpowers/re/frames/` and a summary
+  in `docs/phase3b-notes.md`; Anthony reviews on the phone later.
+
+### Amendment (2026-09-13): two §14 items as built
+
+- **Double-press window slider: 0.5–3.0 s**, not the 1.0–2.5 s above. The session already accepts
+  500 ms–5 s, and both ends of the narrower range turned out to be reachable without meaning to: a fast
+  double-tap lands under 1.0 s, a deliberate or gloved one can run past 2.5 s. Documented on
+  `WINDOW_MIN_MS` in `ui/SettingsScreen.kt`.
+- **Per-device orientation is captured, not edited.** "Default rotation and mirror per driver" is not a
+  pair of controls on the settings screen. Rotating or mirroring the *live view* records that device's
+  default (`rememberOrientation()`), and Settings' Devices group lists what is remembered with a Forget
+  button per entry. Setting an orientation by looking at the picture is the only way to know it is right,
+  and it removes two controls that could disagree with the live view.

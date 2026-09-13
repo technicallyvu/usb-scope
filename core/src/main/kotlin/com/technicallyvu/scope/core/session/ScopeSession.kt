@@ -23,6 +23,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 
 sealed interface ConnectionState {
     data class NoDevice(val needsDriverHint: Boolean) : ConnectionState
@@ -39,6 +40,9 @@ data class SessionState(
     val recording: Boolean = false,
     val lastSaved: String? = null,
     val denoise: Boolean = true,
+    val denoiseStrength: Float = 0.6f,
+    /** The currently-streaming driver's id, or null when no session is [ConnectionState.Streaming]. */
+    val driverId: String? = null,
 )
 
 /**
@@ -51,7 +55,7 @@ interface FrameSink {
     /** The cable button was pressed (debounced rising edge). */
     fun onButtonSnapshot()
     /**
-     * A second cable-button press landed within [ScopeSession.DOUBLE_PRESS_WINDOW_NANOS] of the
+     * A second cable-button press landed within [ScopeSession.doublePressWindowNanos] of the
      * first (debounced rising edge); the first press already took its snapshot via
      * [onButtonSnapshot], this one toggles recording instead. Default no-op for sinks that don't
      * support recording.
@@ -87,9 +91,11 @@ class ScopeSession(
 
     @Volatile private var job: Job? = null
     @Volatile private var denoiser: TemporalDenoiser? = TemporalDenoiser()
+    // Written from the session coroutine on every open, and cleared from any thread by
+    // clearDefaultOverride (a settings screen), hence volatile.
+    @Volatile private var lastDriverId: String? = null
     // The following are only ever read/written from the session coroutine (started in `start()`,
     // confined to `workDispatcher`), so they need no synchronization of their own.
-    private var lastDriverId: String? = null
     private var prevButton = false
     private var lastButtonNanos: Long? = null
     /**
@@ -99,6 +105,23 @@ class ScopeSession(
      */
     private var lastPressNanos: Long? = null
     private val candidates = DeviceCandidates(drivers)
+
+    /**
+     * A second press within this long of the first toggles recording instead of snapshotting
+     * again. Defaults to [DOUBLE_PRESS_WINDOW_NANOS]; clamped to 500 ms..5 s so a bad settings value
+     * can't make double-press detection unusable. Read from the session's worker thread, written
+     * from any thread (a settings screen), hence volatile.
+     *
+     * The initializer below assigns the backing field directly (Kotlin does not run a custom setter
+     * for it), so the clamp never sees the default -- [DOUBLE_PRESS_WINDOW_NANOS] is inside the
+     * range by construction, and the constants test keeps it that way.
+     */
+    @Volatile var doublePressWindowNanos: Long = DOUBLE_PRESS_WINDOW_NANOS
+        set(value) { field = value.coerceIn(MIN_DOUBLE_PRESS_WINDOW_NANOS, MAX_DOUBLE_PRESS_WINDOW_NANOS) }
+
+    /** Per-driver rotation/mirror overrides, consulted when a session starts for that driver. */
+    private data class DriverDefaultOverride(val rotation: Int?, val mirror: Boolean?)
+    private val defaultOverrides = ConcurrentHashMap<String, DriverDefaultOverride>()
 
     fun start() {
         if (job != null) return
@@ -150,9 +173,53 @@ class ScopeSession(
     fun setRecording(active: Boolean) = _state.update { it.copy(recording = active) }
     fun markSaved(name: String) = _state.update { it.copy(lastSaved = name) }
 
-    fun setDenoise(enabled: Boolean) {
-        denoiser = if (enabled) TemporalDenoiser() else null
-        _state.update { it.copy(denoise = enabled) }
+    /**
+     * Turns the temporal denoiser on/off and/or updates its blend [strength] (clamped to
+     * [MIN_DENOISE_STRENGTH]..[MAX_DENOISE_STRENGTH]). When enabling, an existing denoiser has its
+     * strength updated live; there is none yet (or it was off), a fresh one is created with that
+     * strength. The clamped strength is always recorded in state, even while denoise is off, so a
+     * later `setDenoise(true)` (default parameter) picks it back up.
+     */
+    fun setDenoise(enabled: Boolean, strength: Float = state.value.denoiseStrength) {
+        val clamped = strength.coerceIn(MIN_DENOISE_STRENGTH, MAX_DENOISE_STRENGTH)
+        denoiser = if (enabled) (denoiser?.also { it.strength = clamped } ?: TemporalDenoiser(clamped)) else null
+        _state.update { it.copy(denoise = enabled, denoiseStrength = clamped) }
+    }
+
+    /**
+     * Sets the rotation/mirror this session applies whenever it starts streaming for [driverId]
+     * (either flag null keeps that flag alone: [DeviceDriver.defaultRotation] / `false` on a driver
+     * change, the value already in state on a reconnect of the same driver). An override is sticky:
+     * unlike the plain driver default, it is reapplied on *every* open of that driver, including an
+     * unplug/replug of the same probe.
+     *
+     * If [driverId] is the driver streaming right now, the non-null flags also take effect
+     * immediately, so a "this device" settings screen shows its change on the live preview. The
+     * recording lock is honoured, as it is by [rotate]/[toggleMirror]: geometry may not change
+     * mid-recording, but the override is still stored and applies at the next open.
+     */
+    fun setDefaultOverride(driverId: String, rotation: Int?, mirror: Boolean?) {
+        defaultOverrides[driverId] = DriverDefaultOverride(rotation, mirror)
+        _state.update {
+            if (it.driverId != driverId || it.recording) it
+            else it.copy(rotation = rotation ?: it.rotation, mirror = mirror ?: it.mirror)
+        }
+    }
+
+    /**
+     * Forgets [driverId]'s override, so its next open falls back to [DeviceDriver.defaultRotation].
+     * Deliberately leaves the live session alone: nothing about the current view is "wrong" just
+     * because the stored default was dropped.
+     *
+     * Dropping the map entry is not enough on its own: if [driverId] is the driver this session
+     * last opened, the next open would take the "same driver, no override" branch and keep whatever
+     * rotation state happens to hold, so "Forget" would visibly forget nothing. Clearing
+     * [lastDriverId] too makes that open look like a driver change, which is the fallback the KDoc
+     * above promises.
+     */
+    fun clearDefaultOverride(driverId: String) {
+        defaultOverrides.remove(driverId)
+        if (lastDriverId == driverId) lastDriverId = null
     }
 
     /** Every attached device a driver claims, in enumeration order. A list error means "none, this poll". */
@@ -172,12 +239,24 @@ class ScopeSession(
             source = driver.open(transport)
             opened = true
             candidates.onOpened(ref)
-            // Only reset rotation/mirror to the driver default once the device has actually opened,
-            // so a device that keeps failing to open does not wipe the user's rotation every poll.
-            if (driver.id != lastDriverId) _state.update { it.copy(rotation = driver.defaultRotation, mirror = false) }
+            // Only reset rotation/mirror to the driver default (or its override) once the device has
+            // actually opened, so a device that keeps failing to open does not wipe the user's
+            // rotation every poll. A *driver default* applies on a driver change only, so a same-
+            // driver reconnect keeps whatever the user last set; a user-set override applies on
+            // every open of its driver, so a "this device" default is not lost to an unplug/replug.
+            val override = defaultOverrides[driver.id]
+            val driverChanged = driver.id != lastDriverId
+            if (driverChanged || override != null) {
+                _state.update {
+                    it.copy(
+                        rotation = override?.rotation ?: if (driverChanged) driver.defaultRotation else it.rotation,
+                        mirror = override?.mirror ?: if (driverChanged) false else it.mirror,
+                    )
+                }
+            }
             lastDriverId = driver.id
             denoiser?.reset()
-            _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName)) }
+            _state.update { it.copy(connection = ConnectionState.Streaming(driver.displayName), driverId = driver.id) }
             // Same contract as onFrame: a throwing sink must not end the stream.
             try {
                 sink.onStreamStarted()
@@ -200,7 +279,7 @@ class ScopeSession(
         } catch (e: Exception) {
             _state.update { it.copy(connection = ConnectionState.Failed(e.message ?: e.javaClass.simpleName)) }
         } finally {
-            _state.update { it.copy(recording = false) }
+            _state.update { it.copy(recording = false, driverId = null) }
             source?.let { runCatching { it.close() } }
             if (source == null) transport?.let { runCatching { it.close() } }
             prevButton = false
@@ -228,7 +307,7 @@ class ScopeSession(
         if (frame.buttonPressed && !prevButton && (last == null || frame.timestampNanos - last > BUTTON_DEBOUNCE_NANOS)) {
             lastButtonNanos = frame.timestampNanos
             val prevPress = lastPressNanos
-            if (prevPress != null && frame.timestampNanos - prevPress <= DOUBLE_PRESS_WINDOW_NANOS) {
+            if (prevPress != null && frame.timestampNanos - prevPress <= doublePressWindowNanos) {
                 // Second press of a pair: the first already took its snapshot, this one toggles.
                 lastPressNanos = null
                 try {
@@ -256,5 +335,9 @@ class ScopeSession(
         const val BUTTON_DEBOUNCE_NANOS = 300_000_000L
         /** A second press within this long of the first toggles recording instead of snapshotting again. */
         const val DOUBLE_PRESS_WINDOW_NANOS = 1_500_000_000L
+        const val MIN_DOUBLE_PRESS_WINDOW_NANOS = 500_000_000L
+        const val MAX_DOUBLE_PRESS_WINDOW_NANOS = 5_000_000_000L
+        const val MIN_DENOISE_STRENGTH = 0.2f
+        const val MAX_DENOISE_STRENGTH = 1.0f
     }
 }
