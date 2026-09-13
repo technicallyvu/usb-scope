@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
@@ -39,8 +41,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.technicallyvu.scope.BuildConfig
 import com.technicallyvu.scope.R
-import com.technicallyvu.scope.core.session.ConnectionState
-import com.technicallyvu.scope.ui.UiState
 
 private val ButtonSize = 56.dp
 
@@ -51,11 +51,24 @@ private val ButtonSize = 56.dp
  *
  * Each control calls [onInteract] before its own action so using a control restarts the caller's
  * auto-hide timer instead of racing it.
+ *
+ * Every parameter is a stable primitive rather than the whole `UiState`: that state carries a new
+ * `Bitmap` and new `StreamStats` on every frame, so taking it here would recompose nine buttons and
+ * five hand-drawn glyphs at the stream frame rate. With these the sheet skips on the frames where
+ * nothing it cares about changed.
+ *
+ * @param streaming a live stream *and* a live frame — after an unplug the last bitmap is dropped,
+ * and a stale one must never leave Snapshot/Record enabled.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ControlsSheet(
-    ui: UiState,
+    streaming: Boolean,
+    recording: Boolean,
+    recordingStarting: Boolean,
+    denoise: Boolean,
+    showStats: Boolean,
+    replaying: Boolean,
     wide: Boolean,
     onInteract: () -> Unit,
     onSnapshot: () -> Unit,
@@ -69,11 +82,6 @@ fun ControlsSheet(
     onToggleReplay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val s = ui.session
-    // A live frame AND a live stream: after an unplug the last bitmap is dropped, and a stale one
-    // must never leave Snapshot/Record enabled.
-    val streaming = s.connection is ConnectionState.Streaming && ui.image != null
-
     val buttons: @Composable () -> Unit = {
         GlyphButton(
             contentDescription = stringResource(R.string.cd_snapshot),
@@ -84,24 +92,24 @@ fun ControlsSheet(
         // Record/Stop. Disabled during the start transition too: the recorder is not published yet,
         // so a second tap could only race the one in flight. The description flips with the
         // button's role, so TalkBack never says "start" on a stop.
-        val recordCd = if (s.recording) stringResource(R.string.cd_stop) else stringResource(R.string.cd_record)
+        val recordCd = if (recording) stringResource(R.string.cd_stop) else stringResource(R.string.cd_record)
         IconButton(
             onClick = { onInteract(); onToggleRecording() },
-            enabled = streaming && !ui.recordingStarting,
+            enabled = streaming && !recordingStarting,
             modifier = Modifier.size(ButtonSize).semantics { contentDescription = recordCd },
         ) {
-            val enabled = streaming && !ui.recordingStarting
+            val enabled = streaming && !recordingStarting
             val tint = if (enabled) RecordRed else LocalContentColor.current
             when {
-                ui.recordingStarting -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = RecordRed)
-                s.recording -> Canvas(Modifier.size(24.dp)) { stopGlyph(tint) }
+                recordingStarting -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = RecordRed)
+                recording -> Canvas(Modifier.size(24.dp)) { stopGlyph(tint) }
                 else -> Canvas(Modifier.size(24.dp)) { drawCircle(tint, radius = size.minDimension * 0.30f) }
             }
         }
 
         IconButton(
             onClick = { onInteract(); onRotate() },
-            enabled = !s.recording,
+            enabled = !recording,
             modifier = Modifier.size(ButtonSize),
         ) {
             Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_rotate))
@@ -109,24 +117,27 @@ fun ControlsSheet(
 
         GlyphButton(
             contentDescription = stringResource(R.string.cd_mirror),
-            enabled = !s.recording,
+            enabled = !recording,
             onClick = { onInteract(); onToggleMirror() },
         ) { tint -> mirrorGlyph(tint) }
 
         GlyphToggleButton(
             contentDescription = stringResource(R.string.cd_denoise),
-            checked = s.denoise,
+            checked = denoise,
             onCheckedChange = { onInteract(); onToggleDenoise() },
         ) { tint -> denoiseGlyph(tint) }
 
         GlyphToggleButton(
             contentDescription = stringResource(R.string.cd_stats),
-            checked = ui.showStats,
+            checked = showStats,
             onCheckedChange = { onInteract(); onToggleStats() },
         ) { tint -> statsGlyph(tint) }
 
+        // Disabled while recording for the same reason as About below: the settings screen replaces
+        // the live view, and with it the REC badge.
         IconButton(
             onClick = { onInteract(); onSettings() },
+            enabled = !recording,
             modifier = Modifier.size(ButtonSize),
         ) {
             Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.cd_settings))
@@ -136,7 +147,7 @@ fun ControlsSheet(
         // only on-screen sign that a clip is still being written.
         IconButton(
             onClick = { onInteract(); onAbout() },
-            enabled = !s.recording,
+            enabled = !recording,
             modifier = Modifier.size(ButtonSize),
         ) {
             Icon(Icons.Filled.Info, contentDescription = stringResource(R.string.cd_about))
@@ -145,7 +156,7 @@ fun ControlsSheet(
         // Debug-only; Task 5 moves it into the developer sheet.
         if (BuildConfig.DEBUG) {
             TextButton(onClick = { onInteract(); onToggleReplay() }) {
-                Text(stringResource(if (ui.replaying) R.string.dev_replay_stop else R.string.dev_replay_start))
+                Text(stringResource(if (replaying) R.string.dev_replay_stop else R.string.dev_replay_start))
             }
         }
     }
@@ -157,12 +168,19 @@ fun ControlsSheet(
     }
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        // Explicit: `contentColorFor` matches the *exact* colour-scheme role, and a translucent copy
+        // of `surface` is not `surface`, so the default would fall back to LocalContentColor — black
+        // — and every plain IconButton glyph would vanish into the sheet in dark mode.
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = shape,
         modifier = modifier,
     ) {
         if (wide) {
             Column(
-                Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                // Nine 56 dp buttons are taller than a short landscape window; scroll rather than clip.
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) { buttons() }
@@ -244,32 +262,45 @@ private fun DrawScope.stopGlyph(tint: Color) {
     )
 }
 
-/** Two triangles facing each other across a dashed axis: one solid, one outlined. */
+/**
+ * An object and its reflection: two triangles across a dashed mirror line, the left one solid and
+ * the right one outlined.
+ *
+ * Both are symmetric about the horizontal centre line, with their vertical edges facing the axis
+ * and their apexes pointing outwards. The earlier version put both apexes at the bottom outer
+ * corners, which made the pair narrow at the top and wide at the bottom — it read as a road
+ * vanishing into the distance rather than as a reflection.
+ */
 private fun DrawScope.mirrorGlyph(tint: Color) {
     val w = size.width
     val h = size.height
     val cx = w / 2f
+    val cy = h / 2f
+    // Vertical edges sit just clear of the axis; apexes reach almost to the edges of the box.
+    val edge = cx - w * 0.11f
+    val top = h * 0.20f
+    val bottom = h * 0.80f
     drawLine(
         tint,
-        start = Offset(cx, h * 0.06f),
-        end = Offset(cx, h * 0.94f),
+        start = Offset(cx, h * 0.04f),
+        end = Offset(cx, h * 0.96f),
         strokeWidth = w * 0.07f,
-        pathEffect = PathEffect.dashPathEffect(floatArrayOf(w * 0.13f, w * 0.10f)),
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(w * 0.12f, w * 0.09f)),
     )
     val solid = Path().apply {
-        moveTo(cx - w * 0.13f, h * 0.14f)
-        lineTo(cx - w * 0.13f, h * 0.86f)
-        lineTo(w * 0.08f, h * 0.86f)
+        moveTo(edge, top)
+        lineTo(edge, bottom)
+        lineTo(w * 0.05f, cy)
         close()
     }
     drawPath(solid, tint)
     val outlined = Path().apply {
-        moveTo(cx + w * 0.13f, h * 0.14f)
-        lineTo(cx + w * 0.13f, h * 0.86f)
-        lineTo(w * 0.92f, h * 0.86f)
+        moveTo(w - edge, top)
+        lineTo(w - edge, bottom)
+        lineTo(w * 0.95f, cy)
         close()
     }
-    drawPath(outlined, tint, style = Stroke(width = w * 0.08f))
+    drawPath(outlined, tint, style = Stroke(width = w * 0.07f))
 }
 
 /** A filter funnel: the closest simple shape to "smooth out the noise". */

@@ -8,9 +8,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
@@ -47,7 +50,10 @@ fun TrustScreen(onBack: () -> Unit) {
         }.getOrDefault(0)
     }
 
-    Column(Modifier.fillMaxSize()) {
+    // enableEdgeToEdge() (and targetSdk 36, which enforces it regardless) draws this screen behind
+    // the status and gesture bars; without this the title sits under the clock and the last line of
+    // the licence under the gesture bar.
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
         Surface(tonalElevation = 2.dp) {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Text("About & privacy", style = MaterialTheme.typography.titleLarge)

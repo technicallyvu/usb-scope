@@ -62,6 +62,9 @@ data class UiState(
     val screen: Screen = Screen.Live,
     val permissionDevice: UsbDevice? = null,
     val message: String? = null,
+    /** Bumped with every [message], so the screen can tell two identical consecutive messages
+     * apart; keying a `LaunchedEffect` on the text alone silently swallows the second one. */
+    val messageTick: Long = 0L,
     val replaying: Boolean = false,
     /** Bumped on every cable-button event (snapshot or double-press toggle) so the screen can fire
      * a haptic tick via a `LaunchedEffect(ui.hapticTick)`; the initial value must not itself buzz. */
@@ -128,7 +131,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     /** Publishes a formatted resource string as the transient snackbar message. */
     private fun message(@StringRes id: Int, vararg args: Any) {
         val text = getApplication<Application>().getString(id, *args)
-        _ui.update { it.copy(message = text) }
+        _ui.update { it.copy(message = text, messageTick = it.messageTick + 1) }
     }
 
     init {
@@ -304,8 +307,6 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         if (appSettings.flow.value.defaults[driverId] == next) return
         appSettings.update { it.copy(defaults = it.defaults + (driverId to next)) }
     }
-    /** About on, About off — the same button both ways; anything else returns to the live view. */
-    fun toggleTrust() = _ui.update { it.copy(screen = if (it.screen == Screen.Trust) Screen.Live else Screen.Trust) }
     /**
      * Denoise is a persisted preference, so the toggle writes the store and the settings collector
      * applies it to the session (and resets the sink's ARGB denoiser on an off→on transition).
@@ -457,7 +458,13 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     fun onPermissionResult(granted: Boolean) {
         usbDevices.pendingPermission = null
         val denied = if (granted) null else getApplication<Application>().getString(R.string.status_permission_denied)
-        _ui.update { it.copy(permissionDevice = null, message = denied) }
+        _ui.update {
+            it.copy(
+                permissionDevice = null,
+                message = denied,
+                messageTick = if (denied == null) it.messageTick else it.messageTick + 1,
+            )
+        }
     }
 
     fun clearMessage() = _ui.update { it.copy(message = null) }

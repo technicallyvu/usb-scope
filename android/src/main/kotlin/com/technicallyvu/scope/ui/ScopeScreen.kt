@@ -51,6 +51,7 @@ import com.technicallyvu.scope.ui.components.RecBadge
 import com.technicallyvu.scope.ui.components.ShutterFlash
 import com.technicallyvu.scope.ui.components.SnapshotToast
 import com.technicallyvu.scope.ui.components.StatusChip
+import com.technicallyvu.scope.ui.components.toConnStatus
 import kotlinx.coroutines.delay
 
 /** How long the controls stay up after the last interaction, while streaming. */
@@ -90,11 +91,13 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     }
 
     // A haptic tick on every cable-button press (single or double). The view model bumps
-    // ui.hapticTick on each button event; the initial value must not itself buzz on screen entry.
+    // ui.hapticTick on each button event; the value this composition entered on must not itself
+    // buzz (seeded from the tick, not a boolean, so returning from Settings does not swallow the
+    // next real press).
     val haptic = LocalHapticFeedback.current
-    var sawFirstTick by remember { mutableStateOf(false) }
+    val entryHapticTick = remember { ui.hapticTick }
     LaunchedEffect(ui.hapticTick) {
-        if (sawFirstTick) haptic.performHapticFeedback(HapticFeedbackType.LongPress) else sawFirstTick = true
+        if (ui.hapticTick != entryHapticTick) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
     // Auto-hide. Every interaction bumps `interactions`, which restarts the effect below; the
@@ -111,8 +114,20 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         chromeVisible = false
     }
 
+    // A snapshot counts as an interaction, so the chrome — and with it the "Saved" toast — comes
+    // back for its own four seconds. Without this the primary flow (probe in one hand, phone
+    // propped up, press the cable button long after the chrome auto-hid) gets the shutter flash and
+    // no confirmation at all. Seeded like the haptic tick above so entering the screen is not
+    // itself an interaction.
+    val entryFlashTick = remember { ui.flashTick }
+    LaunchedEffect(ui.flashTick) {
+        if (ui.flashTick != entryFlashTick) interactions++
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(ui.message) {
+    // Keyed on the tick, not the text: two identical messages in a row would otherwise leave the
+    // key unchanged, so the second would never be shown (nor consumed).
+    LaunchedEffect(ui.messageTick) {
         val msg = ui.message ?: return@LaunchedEffect
         // Suspends until the snackbar is dismissed (or a newer message cancels this effect, which
         // dismisses it for us); only then is the message consumed.
@@ -138,7 +153,14 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                 modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusChip(ui)
+                    // Primitives, not `ui`: see the ControlsSheet KDoc. fps is only passed (and so
+                    // only changes the chip's arguments) while streaming with stats on.
+                    StatusChip(
+                        status = ui.session.connection.toConnStatus(),
+                        errorMessage = (ui.session.connection as? ConnectionState.Failed)?.message,
+                        replaying = ui.replaying,
+                        fps = if (streaming && ui.showStats) ui.session.stats.fps else null,
+                    )
                     if (ui.showStats) StatsOverlay(ui.session.stats)
                 }
             }
@@ -224,10 +246,23 @@ class SheetActions(
     val onToggleReplay: () -> Unit,
 )
 
+/**
+ * Unpacks [UiState] into the stable primitives [ControlsSheet] takes. This wrapper still recomposes
+ * on every frame (its `ui` parameter is a new instance each time), but it is a single pass-through
+ * call: the sheet below it skips unless one of these booleans actually flipped, so the nine buttons
+ * and their hand-drawn glyphs are no longer redrawn at the stream frame rate.
+ */
 @Composable
 private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: SheetActions) {
     ControlsSheet(
-        ui = ui,
+        // A live frame AND a live stream: after an unplug the last bitmap is dropped, and a stale
+        // one must never leave Snapshot/Record enabled.
+        streaming = ui.session.connection is ConnectionState.Streaming && ui.image != null,
+        recording = ui.session.recording,
+        recordingStarting = ui.recordingStarting,
+        denoise = ui.session.denoise,
+        showStats = ui.showStats,
+        replaying = ui.replaying,
         wide = wide,
         onInteract = onInteract,
         onSnapshot = actions.onSnapshot,

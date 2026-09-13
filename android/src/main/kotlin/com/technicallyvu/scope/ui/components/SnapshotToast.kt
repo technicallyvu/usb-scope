@@ -59,6 +59,9 @@ fun SnapshotToast(thumb: Bitmap?, name: String?, visible: Boolean, modifier: Mod
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+            // Explicit, for the same reason as ControlsSheet: `contentColorFor` does not recognise a
+            // translucent copy of `surface`, so the default would leave both Texts black-on-dark.
+            contentColor = MaterialTheme.colorScheme.onSurface,
             shape = RoundedCornerShape(12.dp),
         ) {
             Row(

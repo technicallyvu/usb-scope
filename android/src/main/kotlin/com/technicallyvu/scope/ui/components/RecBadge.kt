@@ -53,7 +53,9 @@ fun RecBadge(startedAtNanos: Long?, modifier: Modifier = Modifier) {
         }
     }
     val elapsed = if (startedAtNanos == null) 0L else nowNanos - startedAtNanos
-    Surface(color = RecordRed, shape = RoundedCornerShape(50), modifier = modifier) {
+    // contentColor is set explicitly (RecordRed is not a colour-scheme role, so the default would be
+    // LocalContentColor) even though the Text below names its own colour.
+    Surface(color = RecordRed, contentColor = Color.White, shape = RoundedCornerShape(50), modifier = modifier) {
         Text(
             stringResource(R.string.rec_badge_format, formatElapsed(elapsed)),
             color = Color.White,
