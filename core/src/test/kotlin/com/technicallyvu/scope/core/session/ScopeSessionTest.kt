@@ -507,7 +507,7 @@ class ScopeSessionTest {
     }
 
     @Test
-    fun `default override sets rotation and mirror at session start and user changes survive reconnect`(): Unit = runBlocking {
+    fun `default override sets rotation and mirror at session start and reapplies on reconnect`(): Unit = runBlocking {
         val sink = CountingSink()
         val first = EndableTransport(stream(6, loop = true))
         val devices = FakeDevices(listOf(ref)) { first }
@@ -518,16 +518,102 @@ class ScopeSessionTest {
         assertEquals(90, st.rotation, "override rotation should apply at session start")
         assertTrue(st.mirror, "override mirror should apply at session start")
 
-        s.rotate() // 90 -> 180, the user's own choice from here on
+        s.rotate() // 90 -> 180, for this session only
         assertEquals(180, s.state.value.rotation)
 
         devices.opener = { stream(6, loop = true) }
         first.endNow = true
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        // The override is a stored default for this driver, so an unplug/replug of the same probe
+        // brings it back rather than keeping the rotation this session happened to end on.
         withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
-        assertEquals(180, s.state.value.rotation, "reconnect of the same driver must keep the user's rotation, not reapply the override")
+        assertEquals(90, s.state.value.rotation, "an override must reapply on a reconnect of the same driver")
         assertTrue(s.state.value.mirror)
         s.stop()
+    }
+
+    @Test
+    fun `an override with a null flag leaves that flag alone on a reconnect`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val first = EndableTransport(stream(6, loop = true))
+        val devices = FakeDevices(listOf(ref)) { first }
+        val s = session(devices, sink)
+        s.setDefaultOverride("i4season-yuv", null, true)   // mirror only
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(180, s.state.value.rotation, "a null rotation should leave the driver default in place")
+        assertTrue(s.state.value.mirror)
+
+        s.rotate() // 180 -> 270
+        assertEquals(270, s.state.value.rotation)
+
+        devices.opener = { stream(6, loop = true) }
+        first.endNow = true
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.NoDevice } }
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(270, s.state.value.rotation, "a same-driver reconnect must not wipe the rotation an override says nothing about")
+        assertTrue(s.state.value.mirror)
+        s.stop()
+    }
+
+    @Test
+    fun `an override set while streaming changes the live session`(): Unit = runBlocking {
+        val sink = CountingSink()
+        val devices = FakeDevices(listOf(ref)) { stream(6, loop = true) }
+        val s = session(devices, sink)
+        s.start()
+        withTimeout(5_000) { s.state.first { it.connection is ConnectionState.Streaming } }
+        assertEquals(180, s.state.value.rotation)
+        assertFalse(s.state.value.mirror)
+
+        s.setDefaultOverride("i4season-yuv", 90, true)
+        assertEquals(90, s.state.value.rotation, "an override for the streaming driver must apply immediately")
+        assertTrue(s.state.value.mirror, "an override for the streaming driver must apply immediately")
+
+        s.setDefaultOverride("i4season-yuv", 270, null)
+        assertEquals(270, s.state.value.rotation)
+        assertTrue(s.state.value.mirror, "a null flag must leave the live value alone")
+
+        s.setDefaultOverride("uvc-bulk", 0, false)
+        assertEquals(270, s.state.value.rotation, "an override for another driver must not touch the live session")
+        assertTrue(s.state.value.mirror, "an override for another driver must not touch the live session")
+
+        s.setRecording(true)
+        s.setDefaultOverride("i4season-yuv", 0, false)
+        assertEquals(270, s.state.value.rotation, "geometry is locked while recording, as it is for rotate()")
+        assertTrue(s.state.value.mirror, "geometry is locked while recording, as it is for toggleMirror()")
+        s.setRecording(false)
+
+        s.clearDefaultOverride("i4season-yuv")
+        assertEquals(270, s.state.value.rotation, "clearing an override must not change the live session")
+        assertTrue(s.state.value.mirror, "clearing an override must not change the live session")
+        s.stop()
+    }
+
+    @Test
+    fun `an override set while nothing is streaming does not touch the state`(): Unit = runBlocking {
+        val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink())
+        s.setDefaultOverride("i4season-yuv", 90, true)
+        assertEquals(0, s.state.value.rotation, "no driver is streaming, so nothing is live to change")
+        assertFalse(s.state.value.mirror)
+    }
+
+    @Test
+    fun `the double-press window clamps to its bounds`() {
+        val s = session(FakeDevices(emptyList()) { error("unused") }, CountingSink())
+        assertEquals(
+            ScopeSession.DOUBLE_PRESS_WINDOW_NANOS, s.doublePressWindowNanos,
+            "the initializer bypasses the setter, so the default must already be in range",
+        )
+
+        s.doublePressWindowNanos = 1
+        assertEquals(ScopeSession.MIN_DOUBLE_PRESS_WINDOW_NANOS, s.doublePressWindowNanos, "below the minimum should clamp up")
+
+        s.doublePressWindowNanos = 10_000_000_000L
+        assertEquals(ScopeSession.MAX_DOUBLE_PRESS_WINDOW_NANOS, s.doublePressWindowNanos, "above the maximum should clamp down")
+
+        s.doublePressWindowNanos = 2_000_000_000L
+        assertEquals(2_000_000_000L, s.doublePressWindowNanos, "an in-range value should pass through untouched")
     }
 
     @Test

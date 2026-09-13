@@ -26,7 +26,10 @@ import kotlin.math.abs
  * Not thread-safe: one instance per stream.
  */
 class TemporalDenoiser(strength: Float = 0.6f, val motionThreshold: Int = 24, val blockSize: Int = 4) {
-    var strength: Float = strength.coerceIn(0f, 1f)
+    // Written from a settings screen on an arbitrary thread while apply() reads it on the session's
+    // worker thread; volatile so the worker sees the new weight on its next frame rather than
+    // whenever its cache happens to be refreshed. (Not "thread-safe" in any wider sense -- see above.)
+    @Volatile var strength: Float = strength.coerceIn(0f, 1f)
         set(value) { field = value.coerceIn(0f, 1f) }
 
     private var prevYuyv: ByteArray? = null

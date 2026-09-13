@@ -55,7 +55,7 @@ interface FrameSink {
     /** The cable button was pressed (debounced rising edge). */
     fun onButtonSnapshot()
     /**
-     * A second cable-button press landed within [ScopeSession.DOUBLE_PRESS_WINDOW_NANOS] of the
+     * A second cable-button press landed within [ScopeSession.doublePressWindowNanos] of the
      * first (debounced rising edge); the first press already took its snapshot via
      * [onButtonSnapshot], this one toggles recording instead. Default no-op for sinks that don't
      * support recording.
@@ -109,6 +109,10 @@ class ScopeSession(
      * again. Defaults to [DOUBLE_PRESS_WINDOW_NANOS]; clamped to 500 ms..5 s so a bad settings value
      * can't make double-press detection unusable. Read from the session's worker thread, written
      * from any thread (a settings screen), hence volatile.
+     *
+     * The initializer below assigns the backing field directly (Kotlin does not run a custom setter
+     * for it), so the clamp never sees the default -- [DOUBLE_PRESS_WINDOW_NANOS] is inside the
+     * range by construction, and the constants test keeps it that way.
      */
     @Volatile var doublePressWindowNanos: Long = DOUBLE_PRESS_WINDOW_NANOS
         set(value) { field = value.coerceIn(MIN_DOUBLE_PRESS_WINDOW_NANOS, MAX_DOUBLE_PRESS_WINDOW_NANOS) }
@@ -181,15 +185,30 @@ class ScopeSession(
     }
 
     /**
-     * Sets the rotation/mirror this session applies the next time it starts streaming for
-     * [driverId] (either flag null keeps that flag's own default: [DeviceDriver.defaultRotation] or
-     * `false`). Consulted on first connect and on every driver change; a reconnect of the *same*
-     * driver keeps whatever the user last set instead of reapplying the override.
+     * Sets the rotation/mirror this session applies whenever it starts streaming for [driverId]
+     * (either flag null keeps that flag alone: [DeviceDriver.defaultRotation] / `false` on a driver
+     * change, the value already in state on a reconnect of the same driver). An override is sticky:
+     * unlike the plain driver default, it is reapplied on *every* open of that driver, including an
+     * unplug/replug of the same probe.
+     *
+     * If [driverId] is the driver streaming right now, the non-null flags also take effect
+     * immediately, so a "this device" settings screen shows its change on the live preview. The
+     * recording lock is honoured, as it is by [rotate]/[toggleMirror]: geometry may not change
+     * mid-recording, but the override is still stored and applies at the next open.
      */
     fun setDefaultOverride(driverId: String, rotation: Int?, mirror: Boolean?) {
         defaultOverrides[driverId] = DriverDefaultOverride(rotation, mirror)
+        _state.update {
+            if (it.driverId != driverId || it.recording) it
+            else it.copy(rotation = rotation ?: it.rotation, mirror = mirror ?: it.mirror)
+        }
     }
 
+    /**
+     * Forgets [driverId]'s override, so its next open falls back to [DeviceDriver.defaultRotation].
+     * Deliberately leaves the live session alone: nothing about the current view is "wrong" just
+     * because the stored default was dropped.
+     */
     fun clearDefaultOverride(driverId: String) {
         defaultOverrides.remove(driverId)
     }
@@ -213,10 +232,18 @@ class ScopeSession(
             candidates.onOpened(ref)
             // Only reset rotation/mirror to the driver default (or its override) once the device has
             // actually opened, so a device that keeps failing to open does not wipe the user's
-            // rotation every poll.
-            if (driver.id != lastDriverId) {
-                val override = defaultOverrides[driver.id]
-                _state.update { it.copy(rotation = override?.rotation ?: driver.defaultRotation, mirror = override?.mirror ?: false) }
+            // rotation every poll. A *driver default* applies on a driver change only, so a same-
+            // driver reconnect keeps whatever the user last set; a user-set override applies on
+            // every open of its driver, so a "this device" default is not lost to an unplug/replug.
+            val override = defaultOverrides[driver.id]
+            val driverChanged = driver.id != lastDriverId
+            if (driverChanged || override != null) {
+                _state.update {
+                    it.copy(
+                        rotation = override?.rotation ?: if (driverChanged) driver.defaultRotation else it.rotation,
+                        mirror = override?.mirror ?: if (driverChanged) false else it.mirror,
+                    )
+                }
             }
             lastDriverId = driver.id
             denoiser?.reset()
