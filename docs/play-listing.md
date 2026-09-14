@@ -118,8 +118,9 @@ is required to see a live picture; the app shows a "Plug in your endoscope" scre
 ## Store assets
 
 - App icon: `art/icon-play-512.png` (512 × 512, from Anthony's design).
-- Feature graphic (1024 × 500): the icon's gradient with the line art on the left and three words on the
-  right — "No permissions. No internet. Open source." — still to be made.
+- Feature graphic (1024 × 500): `art/feature-graphic-1024x500.png`, rendered by
+  `art/tools/make_feature_graphic.py` (the icon's line art on the left, "No permissions. No internet.
+  Open source." on the right).
 - Phone screenshots (at least 2, ideally 6, 16:9 or 9:16). Capture on the Fold 7 with the real camera:
   1. Live view with the controls showing, pointed at something recognisable (a coin, a label).
   2. Live view with the controls hidden (the full-screen picture).
