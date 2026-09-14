@@ -1,6 +1,6 @@
 # USB Scope privacy policy
 
-**Effective date:** 13 September 2026
+**Effective date:** 14 September 2026
 **Applies to:** USB Scope for Android and USB Scope for Windows, published by TechnicallyVu (Anthony Vu)
 **Contact:** anthony@technicallyvu.com
 
