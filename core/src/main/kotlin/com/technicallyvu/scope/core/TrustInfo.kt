@@ -58,7 +58,7 @@ object TrustInfo {
      * real donation page (Ko-fi / GitHub Sponsors) before release; the Android copy of it is the
      * `donate_url` string resource. Opening it is a browser intent, so it costs no permission.
      */
-    val donateUrl: String = "https://technicallyvu.com/usb-scope/support"
+    val donateUrl: String = "https://ko-fi.com/technicallyvu"
 
     val protocolNote: String =
         "The single-interface YUV protocol was recovered by observing the device and reading the " +

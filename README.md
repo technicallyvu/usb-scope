@@ -1,6 +1,7 @@
 # USB Scope (working name)
 
 Privacy-first, open-source viewer for cheap USB endoscopes that ship with untrusted vendor apps.
+The full privacy policy is in [docs/privacy-policy.md](docs/privacy-policy.md): no permissions, no network, no data collected.
 First supported device: USB 2CE3:3828 / 0329:2022 endoscopes. Verified on hardware in the `i4season-yuv`
 personality (single interface, YUYV); the `useeplus` personality (dual interface, MJPEG) is implemented
 from public protocol documentation and has not been exercised on a device here.

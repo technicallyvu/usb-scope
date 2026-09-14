@@ -2,9 +2,8 @@
     <string name="app_name">USB Scope</string>
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
     <string name="source_url">https://technicallyvu.com/usb-scope</string>
-    <!-- Placeholder: Anthony will point this at the real donation page (Ko-fi / GitHub Sponsors)
-         before release. Opened with a browser intent, which needs no permission. -->
-    <string name="donate_url">https://technicallyvu.com/usb-scope/support</string>
+    <!-- Donation page. Opened with a browser intent, which needs no permission. -->
+    <string name="donate_url">https://ko-fi.com/technicallyvu</string>
 
     <!-- Launcher icon: an all-vector adaptive icon (res/drawable/ic_launcher_background.xml,
          ic_launcher_foreground.xml and ic_launcher_monochrome.xml) - a phone with a USB-C plug and
