@@ -173,6 +173,9 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                 }
             }
             item {
+                // No donation link in the Android app: Google Play's Payments policy forbids in-app
+                // links to external payment methods (see docs/play-policy-audit.md). Sponsorship
+                // lives on the GitHub repository.
                 val sourceUrl = stringResource(R.string.source_url)
                 Text(
                     sourceUrl,
@@ -187,33 +190,6 @@ fun TrustScreen(onBack: () -> Unit, devControls: DevControls? = null) {
                         .clickable(role = Role.Button) { openLink(context, sourceUrl) }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
-            }
-            item {
-                // Directly under the source link, and deliberately the same shape: a heading, one
-                // line of prose, and the URL itself as the tappable text. Opening it is an
-                // ACTION_VIEW intent handed to the browser, so it adds no permission — the count
-                // above stays 0.
-                val donateUrl = stringResource(R.string.donate_url)
-                Column {
-                    Text(
-                        stringResource(R.string.about_support_title),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        stringResource(R.string.about_support_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        donateUrl,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .clickable(role = Role.Button) { openLink(context, donateUrl) }
-                            .wrapContentHeight(Alignment.CenterVertically),
-                    )
-                }
             }
             item { HorizontalDivider() }
             item { Text(protocolNote, style = MaterialTheme.typography.bodyMedium) }

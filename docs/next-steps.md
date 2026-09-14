@@ -68,6 +68,8 @@ https://github.com/technicallyvu/usb-scope; source_url replaced, tags pushed, FU
 review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` by
 `art/tools/make_icon.py` from `art/icon-source.png`, so regenerate it only if the artwork changes.
 ~~Point the donation URL at the real page~~ — done 2026-09-13: https://ko-fi.com/technicallyvu (`donate_url` in strings.xml and `TrustInfo.donateUrl`). `.github/FUNDING.yml` carries the Ko-fi link; add a GitHub Sponsors line if that is set up later.
+Removed from the Android app on 2026-09-14 for Google Play's Payments policy (`docs/play-policy-audit.md` fix 1);
+retained in the desktop About dialog, which is not distributed through Play.
 
 ## Launch prep (Claude)
 Release signing, minify rules, store listing text and screenshots, F-Droid metadata, About screen links, help text.

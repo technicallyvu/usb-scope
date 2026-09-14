@@ -2,8 +2,6 @@
     <string name="app_name">USB Scope</string>
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
     <string name="source_url">https://github.com/technicallyvu/usb-scope</string>
-    <!-- Donation page. Opened with a browser intent, which needs no permission. -->
-    <string name="donate_url">https://ko-fi.com/technicallyvu</string>
 
     <!-- Launcher icon: an all-vector adaptive icon (res/drawable/ic_launcher_background.xml,
          ic_launcher_foreground.xml and ic_launcher_monochrome.xml) - a phone with a USB-C plug and
@@ -136,8 +134,6 @@
     <string name="about_permissions_internal_footnote">App-internal signature permissions (not visible to other apps) are not counted.</string>
     <string name="about_permissions_not_requested_title">This app does not have:</string>
     <string name="about_bullet_format">• %1$s</string>
-    <string name="about_support_title">Support this project</string>
-    <string name="about_support_body">USB Scope is free and open source. If it saved you from a vendor app, you can buy the developer a coffee.</string>
     <string name="about_attributions_title">Attributions</string>
     <string name="about_attribution_detail_format">%1$s — %2$s</string>
     <string name="about_license_title">License</string>

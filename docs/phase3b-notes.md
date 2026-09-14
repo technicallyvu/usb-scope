@@ -120,6 +120,11 @@ still passes on debug and release.
   `FontFamily.Monospace` for `bodySmall`. The licence lives in `core` as a hard-wrapped 80-column
   block, and a fixed-pitch 80-column block re-wraps a second time on a phone — it is prose, not code.
 
+- **The About screen's "Support this project" block is gone on Android (2026-09-14).** The Ko-fi row
+  under the source link was removed for Google Play's Payments policy (`docs/play-policy-audit.md`
+  fix 1), along with the `about_support_title`, `about_support_body` and `donate_url` strings. The
+  desktop About dialog keeps it — the Windows build is not distributed through Play.
+
 - **The developer sheet is gated by a null, not by an `if`.** `TrustScreen` takes
   `devControls: DevControls?`, and only attaches the long-press when it is non-null *and*
   `BuildConfig.DEBUG`; release builds pass null, so no gesture exists and `DevSheet` is never called.

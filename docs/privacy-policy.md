@@ -59,10 +59,11 @@ or plug in a supported camera.
 
 ## Links that leave the app
 
-The About screen contains two links: one to the project's source code and one to a donation page at
-ko-fi.com. Tapping either opens the address in your normal web browser. Nothing is sent from the app;
-once you are in the browser, the privacy policy of that website applies. You can use every feature of
-USB Scope without ever tapping them.
+On Android the About screen contains one link: the project's source code. The Windows app's About
+dialog contains that same source link and one more, to a donation page at ko-fi.com. Tapping a link
+opens the address in your normal web browser. Nothing is sent from the app; once you are in the
+browser, the privacy policy of that website applies. You can use every feature of USB Scope without
+ever tapping them.
 
 ## Children
 

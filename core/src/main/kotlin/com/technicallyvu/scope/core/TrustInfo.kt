@@ -54,9 +54,13 @@ object TrustInfo {
     val sourceUrl: String = "https://github.com/technicallyvu/usb-scope"
 
     /**
-     * "Support this project" on both About surfaces. Placeholder — Anthony will point this at the
-     * real donation page (Ko-fi / GitHub Sponsors) before release; the Android copy of it is the
-     * `donate_url` string resource. Opening it is a browser intent, so it costs no permission.
+     * "Support this project" on the **desktop** About dialog only.
+     *
+     * This must never be surfaced in the Android app: Google Play's Payments policy forbids in-app
+     * links to an external payment method, and the link was removed from the Android About screen
+     * on 2026-09-14 (see `docs/play-policy-audit.md` fix 1). The Windows build is not distributed
+     * through Play, so it keeps the link; on Android, sponsorship lives on the GitHub repository
+     * reached through [sourceUrl]. Opening it is a browser intent, so it costs no permission.
      */
     val donateUrl: String = "https://ko-fi.com/technicallyvu"
 

@@ -7,9 +7,10 @@ created and released — (1) Developer Program Policies, (2) Play App Signing Te
 (3) US export laws — plus the policy areas that actually bite a free, offline, zero-permission
 camera-viewer utility.
 
-**Overall verdict:** all three boxes can be ticked truthfully today, with **one exception that must
-be fixed first** (the Ko-fi link) and **two metadata items that must be fixed before the listing goes
-live** (a stale screenshot and a dead URL). See [Fixes](#fixes-ordered-by-severity).
+**Overall verdict:** all three boxes can be ticked truthfully today. The one exception that had to be
+fixed first (the Ko-fi link) was **fixed on 2026-09-14** — see fix 1 below — leaving **two metadata
+items that must be fixed before the listing goes live** (a stale screenshot and a dead URL). See
+[Fixes](#fixes-ordered-by-severity).
 
 ---
 
@@ -102,11 +103,12 @@ live** (a stale screenshot and a dead URL). See [Fixes](#fixes-ordered-by-severi
 
 ### 1.5 Monetisation and ads — the "buy the developer a coffee" link
 
-**This is the one real finding.**
+**This was the one real finding. Fixed on 14 September 2026** — the in-app link is gone from the
+Android app; the analysis below is kept as the record of why.
 
 | Requirement | What we have | Verdict |
 |---|---|---|
-| Payments policy: "apps may not lead users to a payment method other than Google Play's billing system" except where Section 3, 8 or 9 applies. The "Understanding" page expands this: the prohibition "includes directly linking to a webpage that could lead to an alternate payment method or using language that encourages a user to purchase the digital item outside of the app" | `ui/TrustScreen.kt:196-213` renders a "Support this project" block whose body is "If it saved you from a vendor app, you can buy the developer a coffee" and whose link (`strings.xml:6`, `TrustInfo.kt:61`) opens `https://ko-fi.com/technicallyvu` via `Intent.ACTION_VIEW` (`TrustScreen.kt:259`). The full description repeats it: "the About screen has a link to buy the developer a coffee" | **ACTION NEEDED** |
+| Payments policy: "apps may not lead users to a payment method other than Google Play's billing system" except where Section 3, 8 or 9 applies. The "Understanding" page expands this: the prohibition "includes directly linking to a webpage that could lead to an alternate payment method or using language that encourages a user to purchase the digital item outside of the app" | **Fixed 2026-09-14 (option 1).** The "Support this project" block is gone from `ui/TrustScreen.kt`, and `about_support_title`, `about_support_body` and `donate_url` are gone from `android/src/main/res/values/strings.xml`. Grep of `android/src/main` for `ko-fi`, `donate`, `coffee` and "Support this project" returns zero hits. The About screen now carries one outbound link — the source repo — with a comment at that call site recording why no donation link may be added back. `docs/play-listing.md` no longer advertises a donation link (the "NO SUBSCRIPTION, NO UPSELL" paragraph states only that the app is free with nothing to buy), and the Data safety section lists one outbound link. Sponsorship stays on the GitHub repo via `.github/FUNDING.yml`, which Play explicitly permits: "outside of the app, you are free to communicate with your users about alternative purchase options." `TrustInfo.donateUrl` survives for the desktop build only (not distributed through Play), documented as such in its KDoc | **PASS** |
 
 Which exemption could apply, and why neither clearly does:
 
@@ -207,7 +209,7 @@ Caveat: this is an engineering analysis of a documented factual position, not le
 
 ## Fixes, ordered by severity
 
-1. **Decide the Ko-fi link before the app is created.** As shipped, `ui/TrustScreen.kt:196-213` + `strings.xml:6` + `TrustInfo.kt:61` place an in-app link to an external payment page in a free app, and `docs/play-listing.md` advertises it. Neither the tax-exempt-donation nor (safely) the peer-to-peer exemption covers it, and Google enforced exactly this against AnkiDroid on 11 September 2026. Recommended: remove the URL and the "buy the developer a coffee" body from the app and from the full description; keep the donation route on GitHub and technicallyvu.com, which Play explicitly allows.
+1. ~~**Decide the Ko-fi link before the app is created.**~~ — **DONE 2026-09-14** (option 1, the safest). The "Support this project" block was deleted from `ui/TrustScreen.kt` and the `about_support_title`, `about_support_body` and `donate_url` strings from `android/src/main/res/values/strings.xml`; the About screen keeps only the source link, with a comment there recording the policy reason. `docs/play-listing.md` no longer mentions donations, coffee or Ko-fi, in the full description or in the Data safety bullet. The donation route lives on the GitHub repo (`.github/FUNDING.yml`) and technicallyvu.com, which Play explicitly allows. `TrustInfo.donateUrl` and the desktop About dialog are unchanged — the Windows build is not distributed through Play. `versionCode` was not bumped: nothing has been uploaded yet.
 2. **Re-capture `art/screenshots/play/06-about.png`.** It shows `https://technicallyvu.com/usb-scope` as the source link; that URL 404s today and the shipping build now shows `https://github.com/technicallyvu/usb-scope` (`strings.xml:4`, commit `dd934f7`, 39 minutes after the screenshots were finalised). A screenshot that does not match the app is a metadata violation. Capture from a clean, tagged build so the version line does not read `-dirty`.
 3. **Decide what lives at `https://technicallyvu.com/usb-scope`.** The privacy policy is at `/usb-scope/privacy` and renders; the parent 404s. Either publish a landing page or stop pointing anything at the parent.
 4. **Complete Android developer verification in Play Console** at account setup — the first enforced markets hit 30 September 2026.
@@ -216,8 +218,8 @@ Caveat: this is an engineering analysis of a documented factual position, not le
 
 ## Overall verdict
 
-**Yes, all three boxes can be ticked truthfully — after fix 1.**
+**Yes, all three boxes can be ticked truthfully.** Fix 1 was applied on 2026-09-14.
 
-- **Developer Program Policies:** the app is unusually clean against every section that applies (permissions, user data, IP, metadata, health, families, minimum functionality, device abuse, target API level). The single genuine violation risk is the external donation link under the Payments policy. Fixes 2–3 are metadata accuracy, which is also part of this declaration and must be done before the listing is submitted.
+- **Developer Program Policies:** the app is unusually clean against every section that applies (permissions, user data, IP, metadata, health, families, minimum functionality, device abuse, target API level). The single genuine violation risk was the external donation link under the Payments policy, removed from the Android app on 2026-09-14. Fixes 2–3 are metadata accuracy, which is also part of this declaration and must be done before the listing is submitted.
 - **Play App Signing ToS:** nothing in the project conflicts with it; accept as written.
 - **US export laws:** EAR99, no encryption functionality, no BIS filing of any kind. Certify without reservation.

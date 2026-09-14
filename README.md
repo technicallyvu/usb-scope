@@ -73,4 +73,6 @@ Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`,
 - Material 3 with dynamic colour on Android 12+, light and dark. The launcher icon is Anthony's design (see `art/`).
 - About & privacy screen (Android) and About dialog (desktop): permissions the app does not have, source link,
   MIT license, attribution to the prior reverse-engineering projects, version and build id.
-- Free and open source. A donation link in About opens your browser; the app itself still requests no permissions.
+- Free and open source. Sponsorship goes through the GitHub Sponsor button on the repository (which points at
+  Ko-fi); the Android app itself contains no payment or donation links, because Google Play's Payments policy
+  forbids in-app links to an external payment method (`docs/play-policy-audit.md`).

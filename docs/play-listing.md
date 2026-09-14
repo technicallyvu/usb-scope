@@ -65,8 +65,8 @@ The whole app is MIT licensed. Anyone can read the code, build it, and check eve
 The source link is on the About screen.
 
 NO SUBSCRIPTION, NO UPSELL
-USB Scope is free. If it saved you from installing an app you did not trust, the About screen has a link
-to buy the developer a coffee. It opens in your browser; the app itself stays offline.
+USB Scope is free. There is nothing to buy: no purchases inside the app, no subscription, no paid tier, no
+locked features and no trial that runs out. Every feature is there the first time you open it.
 
 FAIR WARNING ABOUT RESOLUTION
 These cameras deliver 320×240 no matter what the box says. Some bundled apps upscale the picture before
@@ -94,7 +94,7 @@ reviewer if asked:
 - Photos and clips are written through the system MediaStore into the user's own Gallery and are never read
   or uploaded by the app.
 - Settings are stored in the app's private SharedPreferences and deleted on uninstall.
-- The two outbound links (source code, donation page) open the system browser; nothing is sent from the app.
+- The one outbound link (source code) opens the system browser; nothing is sent from the app.
 
 Security practices section: data is not encrypted in transit (there is no transit); users can delete data
 (delete the files from the Gallery; uninstall removes settings).
