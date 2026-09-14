@@ -1,4 +1,5 @@
 import com.android.build.api.artifact.SingleArtifact
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)   // AGP 9: Kotlin is built in; do not apply org.jetbrains.kotlin.android
@@ -28,11 +29,38 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Release signing is optional so the public repository builds without any secret. Point
+    // USB_SCOPE_KEYSTORE_PROPERTIES (or the default path below, which is outside the repo) at a
+    // properties file with storeFile / storePassword / keyAlias / keyPassword to sign release
+    // builds with the Play upload key. See docs/release.md.
+    val keystoreProps = loadKeystoreProperties()
+    if (keystoreProps != null) {
+        signingConfigs {
+            create("upload") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (keystoreProps != null) signingConfig = signingConfigs.getByName("upload")
         }
     }
+}
+
+fun loadKeystoreProperties(): Properties? {
+    val path = System.getenv("USB_SCOPE_KEYSTORE_PROPERTIES")
+        ?: "C:/Projects/usb-endoscope-app-secrets/keystore.properties"
+    val f = File(path)
+    if (!f.isFile) return null
+    val props = Properties()
+    f.inputStream().use { props.load(it) }
+    return props
 }
 
 // Built-in Kotlin (AGP 9): the Kotlin JVM target must match compileOptions.

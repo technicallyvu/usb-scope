@@ -56,6 +56,12 @@ density, settings persistence across a restart, per-device orientation memory ac
 dark mode against a real picture, and the launcher icon on a real launcher (only the emulator's circle mask has
 been seen; the Fold 7 uses a different mask, and Android 13 themed icons are still unverified).
 
+## Release signing (done 2026-09-14)
+Upload keystore generated outside the repo (see `docs/release.md` for the path and backup advice);
+`bundleRelease` / `assembleRelease` sign automatically when the properties file is present. Play developer
+account registered as an organization (dev@technicallyvu.com); phone verification is waiting on Google's
+identity/organization review. Signed 0.3.1 bundle is ready for the first upload.
+
 ## Launch prep (Anthony)
 ~~Name~~ (decided 2026-09-13: USB Scope; a USPTO search is still worth one look before the listing goes live), D-U-N-S, Play developer account, privacy policy page, ~~GitHub repository~~ (created 2026-09-13 at
 https://github.com/technicallyvu/usb-scope; source_url replaced, tags pushed, FUNDING.yml added), one-hour legal

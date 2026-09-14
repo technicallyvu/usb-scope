@@ -9,3 +9,6 @@ local.properties
 # Local working area: holds the decompiled vendor app. Never commit.
 .superpowers/
 __pycache__/
+*.jks
+*.keystore
+keystore.properties
