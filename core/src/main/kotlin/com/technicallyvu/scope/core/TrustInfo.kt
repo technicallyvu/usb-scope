@@ -51,7 +51,7 @@ object TrustInfo {
      * Where the source lives. Placeholder until the repository has a public home; Android renders
      * the same URL from the `source_url` string resource.
      */
-    val sourceUrl: String = "https://technicallyvu.com/usb-scope"
+    val sourceUrl: String = "https://github.com/technicallyvu/usb-scope"
 
     /**
      * "Support this project" on both About surfaces. Placeholder — Anthony will point this at the

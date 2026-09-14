@@ -115,7 +115,7 @@ hardware). Denoise and the trust screen await Anthony's look on the phone the ne
   toggle; at or below 25 ms leave the default on. 25 ms is the threshold because a 30 fps stream has a 33 ms
   budget and decode plus draw need the rest.
 - **Trust screen:** open About & privacy on the phone; "Permissions requested: 0" and the build id should show.
-  `source_url` is a placeholder until the GitHub repository exists.
+  `source_url` was a placeholder until the GitHub repository existed; it now points at https://github.com/technicallyvu/usb-scope (2026-09-13).
 
 ## Phase 3 launch backlog (carried)
 See `docs/phase2-notes.md` "Deferred to Phase 3": icon and theme, release signing and minify, Play assets and

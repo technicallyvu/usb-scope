@@ -57,11 +57,11 @@ dark mode against a real picture, and the launcher icon on a real launcher (only
 been seen; the Fold 7 uses a different mask, and Android 13 themed icons are still unverified).
 
 ## Launch prep (Anthony)
-~~Name~~ (decided 2026-09-13: USB Scope; a USPTO search is still worth one look before the listing goes live), D-U-N-S, Play developer account, privacy policy page, GitHub repository (then
-replace source_url, push tags v0.1.0-bench, v0.2.0-android, v0.3.0-features, v0.3.1-polish), one-hour legal
+~~Name~~ (decided 2026-09-13: USB Scope; a USPTO search is still worth one look before the listing goes live), D-U-N-S, Play developer account, privacy policy page, ~~GitHub repository~~ (created 2026-09-13 at
+https://github.com/technicallyvu/usb-scope; source_url replaced, tags pushed, FUNDING.yml added), one-hour legal
 review. The launcher icon is done; the 512x512 Play listing icon is rendered at `art/icon-play-512.png` by
 `art/tools/make_icon.py` from `art/icon-source.png`, so regenerate it only if the artwork changes.
-~~Point the donation URL at the real page~~ — done 2026-09-13: https://ko-fi.com/technicallyvu (`donate_url` in strings.xml and `TrustInfo.donateUrl`). Add GitHub Sponsors to the repo's FUNDING.yml once the repository exists.
+~~Point the donation URL at the real page~~ — done 2026-09-13: https://ko-fi.com/technicallyvu (`donate_url` in strings.xml and `TrustInfo.donateUrl`). `.github/FUNDING.yml` carries the Ko-fi link; add a GitHub Sponsors line if that is set up later.
 
 ## Launch prep (Claude)
 Release signing, minify rules, store listing text and screenshots, F-Droid metadata, About screen links, help text.

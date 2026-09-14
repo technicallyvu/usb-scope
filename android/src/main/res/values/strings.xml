@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">USB Scope</string>
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
-    <string name="source_url">https://technicallyvu.com/usb-scope</string>
+    <string name="source_url">https://github.com/technicallyvu/usb-scope</string>
     <!-- Donation page. Opened with a browser intent, which needs no permission. -->
     <string name="donate_url">https://ko-fi.com/technicallyvu</string>
 

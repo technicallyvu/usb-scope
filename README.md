@@ -70,7 +70,7 @@ Phase 2 accepted 2026-09-10 on a Galaxy Z Fold 7. Notes: `docs/phase2-notes.md`,
 - Snapshot and recording feedback: shutter flash, a "Saved" toast with a thumbnail, a spinner while the encoder
   starts, a REC timer.
 - Per-device orientation memory: rotate or mirror once and that device comes up that way next time.
-- Material 3 with dynamic colour on Android 12+, light and dark. The launcher icon is a placeholder.
+- Material 3 with dynamic colour on Android 12+, light and dark. The launcher icon is Anthony's design (see `art/`).
 - About & privacy screen (Android) and About dialog (desktop): permissions the app does not have, source link,
   MIT license, attribution to the prior reverse-engineering projects, version and build id.
 - Free and open source. A donation link in About opens your browser; the app itself still requests no permissions.
