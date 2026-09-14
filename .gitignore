@@ -8,3 +8,4 @@ local.properties
 *.log
 # Local working area: holds the decompiled vendor app. Never commit.
 .superpowers/
+__pycache__/
