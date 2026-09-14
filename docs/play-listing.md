@@ -12,9 +12,9 @@ USB Scope: Endoscope Camera
 ## Short description (80 characters max)
 
 ```
-Endoscope & borescope viewer. No permissions, no internet, no tracking. Open source.
+Endoscope viewer. No permissions, no internet, no tracking. Open source.
 ```
-(80 characters)
+(72 characters)
 
 Alternative if Play's reviewer objects to the ampersand or the length:
 
@@ -72,7 +72,7 @@ FAIR WARNING ABOUT RESOLUTION
 These cameras deliver 320×240 no matter what the box says. Some bundled apps upscale the picture before
 saving so the files look like HD. USB Scope saves exactly what the camera sends.
 ```
-(about 2,400 characters)
+(about 2,650 characters)
 
 ## Category and tags
 
