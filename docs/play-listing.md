@@ -16,7 +16,7 @@ Endoscope viewer. No permissions, no internet, no tracking. Open source.
 ```
 (72 characters)
 
-Alternative if Play's reviewer objects to the ampersand or the length:
+Alternative wording:
 
 ```
 Endoscope viewer with zero permissions and no internet access. Open source.
