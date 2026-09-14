@@ -1,4 +1,4 @@
-# USB Scope (working name)
+# USB Scope
 
 Privacy-first, open-source viewer for cheap USB endoscopes that ship with untrusted vendor apps.
 The full privacy policy is in [docs/privacy-policy.md](docs/privacy-policy.md): no permissions, no network, no data collected.
