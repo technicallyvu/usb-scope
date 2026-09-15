@@ -65,3 +65,17 @@ Verify the signature if in doubt:
 Play App Signing is mandatory for new apps: on the first upload Play Console offers to generate the
 app signing key itself and register this keystore's certificate as the upload key. Accept that; do not
 export or upload the `.jks`.
+
+## Play-distributed build (verified 2026-09-14)
+
+Play App Signing re-signs the bundle with Google's app signing key, so the APK users install carries a
+different certificate from the upload key above:
+
+- App signing certificate SHA-256 (what is on users' phones):
+  `67:3F:3C:EB:23:DD:16:3D:4E:B1:70:82:9E:52:C1:C8:92:0C:81:1E:D6:41:0B:E6:98:A8:FC:5E:24:9A:59:47`
+- Upload certificate SHA-256 (this keystore): see above.
+
+Consequence: a side-loaded release APK from GitHub and the Play build cannot be installed over each other
+without an uninstall first. Play delivers split APKs (base + arm64 + language + density) rather than the
+single APK; the merged manifest still requests no permissions (only the AndroidX app-private signature
+permission), and the only native library is AndroidX `graphics-path`, pulled in by Compose.
