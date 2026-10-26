@@ -1,6 +1,8 @@
 package com.technicallyvu.scope.core.useeplus
 
 import com.technicallyvu.scope.core.TestPackets
+import com.technicallyvu.scope.core.driver.Frame
+import com.technicallyvu.scope.core.driver.FrameData
 import com.technicallyvu.scope.core.driver.PacketSink
 import com.technicallyvu.scope.core.fixture.LoggedPacket
 import com.technicallyvu.scope.core.fixture.ReplayTransport
@@ -9,6 +11,7 @@ import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -27,6 +30,7 @@ class UseeplusDriverTest {
         sleep = { slept += it },
         ioDispatcher = Dispatchers.Default,
         packetSink = sink,
+        readAhead = false,
     )
 
     /** N synthetic frames as head+tail packets, each frame's bytes distinct, plus a trailing head to flush the last. */
@@ -99,6 +103,29 @@ class UseeplusDriverTest {
         val frames = runBlocking { driver().open(t).frames.take(2).toList() }
         assertFalse(frames[0].buttonPressed)
         assertTrue(frames[1].buttonPressed)
+    }
+
+    private fun frame(id: Byte, pressed: Boolean) = Frame(FrameData.Jpeg(byteArrayOf(id)), id.toLong(), pressed, 0, 0)
+
+    @Test
+    fun `a busy collector gets the newest frame, carrying a press from a replaced one`() {
+        // runBlocking is single-threaded: the producer emits all three before the collector runs once.
+        val got = runBlocking { flowOf(frame(1, true), frame(2, false), frame(3, false)).latestKeepingPresses().toList() }
+        assertEquals(1, got.size)
+        assertEquals(3.toByte(), (got[0].data as FrameData.Jpeg).bytes[0])
+        assertTrue(got[0].buttonPressed)
+    }
+
+    @Test
+    fun `conflation never invents a press`() {
+        val got = runBlocking { flowOf(frame(1, false), frame(2, false)).latestKeepingPresses().toList() }
+        assertFalse(got.single().buttonPressed)
+    }
+
+    @Test
+    fun `read-ahead still ends with a UsbException when the device goes away`() {
+        val source = UseeplusDriver(clock = { now }, sleep = { }, ioDispatcher = Dispatchers.Default).open(ReplayTransport(stream(3)))
+        assertThrows(UsbException::class.java) { runBlocking { source.frames.toList() } }
     }
 
     @Test

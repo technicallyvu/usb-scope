@@ -10,9 +10,12 @@ import com.technicallyvu.scope.core.usb.UsbException
 import com.technicallyvu.scope.core.usb.UsbTransport
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import java.util.concurrent.locks.ReentrantLock
@@ -27,6 +30,8 @@ class UseeplusDriver(
     private val sleep: (millis: Long) -> Unit = Thread::sleep,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val packetSink: PacketSink? = null,
+    /** Keep reading USB while the collector is busy; off only for packet-exact replay tests. */
+    private val readAhead: Boolean = true,
 ) : DeviceDriver {
 
     override val id = "useeplus"
@@ -41,14 +46,14 @@ class UseeplusDriver(
     }
 
     override fun withPacketSink(sink: PacketSink): DeviceDriver =
-        UseeplusDriver(clock, sleep, ioDispatcher, sink)
+        UseeplusDriver(clock, sleep, ioDispatcher, sink, readAhead)
 
     override fun open(transport: UsbTransport): FrameSource {
         var lastError: UsbException? = null
         repeat(OPEN_ATTEMPTS) {
             try {
                 handshake(transport)
-                return UseeplusFrameSource(transport, clock, ioDispatcher, packetSink)
+                return UseeplusFrameSource(transport, clock, ioDispatcher, packetSink, readAhead)
             } catch (e: UsbException) {
                 lastError = e
                 // No device reset here: on libusb resetDevice() invalidates the handle we are about to
@@ -99,6 +104,7 @@ class UseeplusFrameSource(
     private val clock: () -> Long,
     private val dispatcher: CoroutineDispatcher,
     private val packetSink: PacketSink?,
+    private val readAhead: Boolean = true,
 ) : FrameSource {
     private val _stats = MutableStateFlow(StreamStats())
     override val stats: StateFlow<StreamStats> = _stats
@@ -117,7 +123,7 @@ class UseeplusFrameSource(
     // collector, which lets this loop race ahead of a downstream take(n)'s cancellation and attempt
     // reads the collector no longer wants. Offloading per-call keeps emit() a direct, backpressured
     // handoff to the collector so cancellation is observed before the next read is issued.
-    override val frames: Flow<Frame> = flow {
+    private val unbuffered: Flow<Frame> = flow {
         val reassembler = FrameReassembler()
         val fps = FpsMeter()
         val buf = ByteArray(UseeplusDriver.PACKET_SIZE)
@@ -145,6 +151,12 @@ class UseeplusFrameSource(
         }
     }
 
+    // Keep reading while the collector decodes/denoises (~80 ms a frame on a Mi A3): a stalled read
+    // overruns the camera and the following frames arrive truncated. Under load only the newest frame
+    // waits, but a cable-button press on a frame that gets replaced is carried onto its replacement,
+    // so a press is never lost to a busy collector.
+    override val frames: Flow<Frame> = if (readAhead) unbuffered.latestKeepingPresses() else unbuffered
+
     /** Non-suspending. Blocks only for as long as an in-flight read needs to return (READ_TIMEOUT_MS). */
     override fun close() {
         closed = true
@@ -153,5 +165,34 @@ class UseeplusFrameSource(
             runCatching { transport.releaseInterface(UseeplusDriver.IFACE_CONTROL) }
             runCatching { transport.close() }
         }
+    }
+}
+
+/**
+ * Conflates to the newest frame like `buffer(1, DROP_OLDEST)`, except that a replaced frame's
+ * [Frame.buttonPressed] is ORed into the frame that replaces it. Upstream runs in its own coroutine;
+ * its exceptions (a UsbException when the device goes away) still reach the collector.
+ */
+internal fun Flow<Frame>.latestKeepingPresses(): Flow<Frame> = channelFlow {
+    val lock = Any()
+    var pending: Frame? = null
+    val ready = Channel<Unit>(Channel.CONFLATED)
+    launch {
+        collect { f ->
+            synchronized(lock) {
+                val prev = pending
+                pending = if (prev != null && prev.buttonPressed && !f.buttonPressed) {
+                    Frame(f.data, f.timestampNanos, true, f.cameraNumber, f.sensorValue)
+                } else {
+                    f
+                }
+            }
+            ready.trySend(Unit)
+        }
+        ready.close()
+    }
+    for (signal in ready) {
+        val f = synchronized(lock) { pending.also { pending = null } } ?: continue
+        send(f)
     }
 }
